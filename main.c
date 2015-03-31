@@ -100,6 +100,11 @@ int main() {
     perror("creating socket failed");
     return 1;
   }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, "lo", 2) < 0) {
+    perror("binding to device failed");
+    return 1;
+  }
   
   broadcast_perm = 1;
   if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
@@ -109,7 +114,7 @@ int main() {
 
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
-  bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  bind_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
   bind_addr.sin_port = htons(src_port);
 
   if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
@@ -117,11 +122,14 @@ int main() {
     return 1;
   }
 
+  printf("Listening for requests\n");
+
   FD_ZERO(&fdset);
   for(;;) {
     FD_SET(sock, &fdset);
     if((num_ready = select(sock, &fdset, NULL, NULL, NULL)) < 0) {;
       if(errno == EINTR) {
+        printf("huh?\n");
         continue;
       }
       perror("error during select");
