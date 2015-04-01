@@ -71,7 +71,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   return 0;
 }
 
-int send_response(int sock, const char* lease_ip, const char* lease_netmask, const char* password) {
+int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
   struct response resp;
 
   resp.type = 42;
@@ -99,7 +99,7 @@ int handle_incoming(struct interface* iface) {
   
   // TODO this is just an example response
   if(req.type == 42) {
-    return send_response(iface->sock, iface->ip, iface->netmask, "0123456701234567");
+    return send_response(iface->sock, iface->ip, iface->netmask,  "0123456701234567");
   }
 
   return -1;
@@ -129,18 +129,8 @@ void usagefail(char* command_name) {
   return;
 }
 
-struct interface* new_interface(char* ifname, char* lease_ip, char* lease_netmask) {
+struct interface* new_interface() {
   struct interface* iface = (struct interface*) malloc(sizeof(struct interface));
-
-  iface->ifname = (char*) malloc(strlen(ifname)+1);
-  iface->ip = (char*) malloc(strlen(lease_ip)+1);
-  iface->netmask = (char*) malloc(strlen(lease_netmask)+1);
-  iface->addr = (struct sockaddr_in*) malloc(sizeof(struct sockaddr_in));
-
-  memcpy(iface->ifname, ifname, strlen(ifname)+1);
-  memcpy(iface->ip, lease_ip, strlen(lease_ip)+1);
-  memcpy(iface->netmask, lease_netmask, strlen(lease_netmask)+1);
-
   return iface;
 }
 
@@ -174,7 +164,7 @@ struct interface* add_interface(struct interface* iface) {
 }
 
 
-int monitor_interface(char* ifname, char* lease_ip, char* lease_netmask) {
+int monitor_interface(struct interface* iface) {
 
   struct sockaddr_in bind_addr;
   int broadcast_perm;
@@ -182,33 +172,31 @@ int monitor_interface(char* ifname, char* lease_ip, char* lease_netmask) {
   int sockmode;
   int sock;
 
-  struct interface* iface = new_interface(ifname, lease_ip, lease_netmask);
-
   if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
     perror("creating socket failed");
-    return 1;
+    return -1;
   }
 
-  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)) < 0) {
+  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, iface->ifname, strlen(iface->ifname)) < 0) {
     perror("binding to device failed");
-    return 1;
+    return -1;
   }
 
   sockmode = fcntl(sock, F_GETFL, 0);
   if(sockmode < 0) {
     perror("error getting socket mode");
-    return 1;
+    return -1;
   }
   
   if(fcntl(sock, F_SETFL, sockmode | O_NONBLOCK) < 0) {
     perror("failed to set non-blocking mode for socket");
-    return 1;
+    return -1;
   }
 
   broadcast_perm = 1;
   if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
     perror("setting broadcast permission on socket failed");
-    return 1;
+    return -1;
   }
 
   memset(&bind_addr, 0, sizeof(bind_addr));
@@ -218,12 +206,75 @@ int monitor_interface(char* ifname, char* lease_ip, char* lease_netmask) {
 
   if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
     perror("failed to bind udp socket");
-    return 1;
+    return -1;
   }
 
   iface->sock = sock;
   *(iface->addr) = bind_addr;
   add_interface(iface);
+
+  return 0;
+}
+
+int parse_arg(char* arg) {
+
+  struct interface* iface;
+  int arglen = strlen(arg);
+  int i;
+  int ip_offset;
+  int netmask_offset;
+  int ip_len;
+  int netmask_len;
+
+  iface = new_interface();
+
+  for(i=0; i < arglen; i++) {
+
+    if(arg[i] == '=') {
+      iface->ifname = (char*) malloc(i+1);
+      memcpy(iface->ifname, arg, i);
+      iface->ifname[i] = '\0';
+      ip_offset = i + 1;
+    }
+    if(arg[i] == '/') {
+      if(!iface->ifname) {
+        return -1;
+      }
+      
+      ip_len = i - ip_offset;
+      iface->ip = (char*) malloc(ip_len + 1);
+      memcpy(iface->ip, arg + ip_offset, ip_len);
+      iface->ip[ip_len] = '\0';
+      netmask_offset = i + 1;
+
+      netmask_len = strlen(arg) - netmask_offset;
+      iface->netmask = (char*) malloc(netmask_len + 1);
+      memcpy(iface->netmask, arg + netmask_offset, netmask_len);
+      iface->netmask[netmask_len] = '\0';
+
+      break;
+    }
+  }
+
+  if(!iface->ifname || !iface->ip || !iface->netmask) {
+    fprintf(stderr, "Failed to parse argument: %s\n", arg);
+    return -1;
+  }
+
+  monitor_interface(iface);
+  
+  return 0;
+}
+
+
+int parse_args(int argc, char** argv) {
+  
+  int i;
+  for(i=0; i < argc; i++) {
+    printf("opts: %s\n", argv[0]);
+
+    parse_arg(argv[i]);
+  }
 
   return 0;
 }
@@ -260,7 +311,7 @@ int main(int argc, char** argv) {
     return;
   }
 
-  monitor_interface("lo", "100.64.2.3", "255.255.255.192");
+  parse_args(argc - optind, argv + optind);
 
   printf("Listening for requests\n");
 
