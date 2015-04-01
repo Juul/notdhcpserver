@@ -19,6 +19,17 @@
 
 #define PASSWORD_LENGTH (16)
 
+// structs below
+
+struct interface {
+  char* ifname;
+  char* ip;
+  char* netmask;
+  int sock;
+  struct sockaddr_in* addr;
+  struct interface* next;
+};
+
 struct request {
   uint32_t type;
 };
@@ -30,8 +41,14 @@ struct response {
   char password[PASSWORD_LENGTH];
 };
 
+// global variables below
+
+int verbose = 0;
 int src_port = 4242;
 int dest_port = 4243;
+struct interface* interfaces = NULL;
+
+// functions declarations below
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
   struct sockaddr_in broadcast_addr;
@@ -65,14 +82,14 @@ int send_response(int sock, const char* lease_ip, const char* lease_netmask, con
   return broadcast_packet(sock, (void*) &resp, sizeof(resp));
 }
 
-int handle_incoming(int sock, struct sockaddr_in* addr) {
+int handle_incoming(struct interface* iface) {
   struct request req;
   ssize_t ret;
   ssize_t received = 0;
-  socklen_t addrlen = sizeof(addr);
+  socklen_t addrlen = sizeof(iface->addr);
   
   while(received < sizeof(req)) {
-    ret = recvfrom(sock, &req, sizeof(req), 0, (struct sockaddr*) addr, &addrlen);
+    ret = recvfrom(iface->sock, &req, sizeof(req), 0, (struct sockaddr*) &(iface->addr), &addrlen);
     if(ret < 0) {
       perror("error receiving packet");
       break;
@@ -82,7 +99,7 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   
   // TODO this is just an example response
   if(req.type == 42) {
-    return send_response(sock, "100.64.2.2", "255.192.0.0", "0123456701234567");
+    return send_response(iface->sock, iface->ip, iface->netmask, "0123456701234567");
   }
 
   return -1;
@@ -112,48 +129,67 @@ void usagefail(char* command_name) {
   return;
 }
 
-int main(int argc, char** argv) {
+struct interface* new_interface(char* ifname, char* lease_ip, char* lease_netmask) {
+  struct interface* iface = (struct interface*) malloc(sizeof(struct interface));
 
-  fd_set fdset;
-  int sock;
+  iface->ifname = (char*) malloc(strlen(ifname)+1);
+  iface->ip = (char*) malloc(strlen(lease_ip)+1);
+  iface->netmask = (char*) malloc(strlen(lease_netmask)+1);
+  iface->addr = (struct sockaddr_in*) malloc(sizeof(struct sockaddr_in));
+
+  memcpy(iface->ifname, ifname, strlen(ifname)+1);
+  memcpy(iface->ip, lease_ip, strlen(lease_ip)+1);
+  memcpy(iface->netmask, lease_netmask, strlen(lease_netmask)+1);
+
+  return iface;
+}
+
+/*
+struct interface* get_interface_by_sock(int sock) {
+  struct interface* iface;
+  iface = interfaces;
+  do {
+    if(iface->sock == sock) {
+      return iface;
+    }
+  } while(iface = iface->next);
+
+  return NULL;
+}
+*/
+
+// add interface to linked list and return the previous end of the linked list
+struct interface* add_interface(struct interface* iface) {
+  struct interface* cur = interfaces;
+
+  if(!interfaces) {
+    interfaces = iface;
+  } else {
+    while(cur->next) {
+      cur = cur->next;
+    }
+    cur->next = iface;
+  }
+  return cur;
+}
+
+
+int monitor_interface(char* ifname, char* lease_ip, char* lease_netmask) {
+
   struct sockaddr_in bind_addr;
   int broadcast_perm;
   int packetlen;
-  int num_ready;
   int sockmode;
-  int c;
-  int verbose = 0;
-  extern int optind;
+  int sock;
 
-  if(argc <= 0) {
-    usagefail(NULL);
-    return 1;
-  }
+  struct interface* iface = new_interface(ifname, lease_ip, lease_netmask);
 
-  while((c = getopt(argc, argv, "dh")) != -1) {
-    switch (c) { 
-    case 'v': 
-      printf("Verbose mode enabled\n");
-      verbose = 1; 
-      break; 
-    case 'h':
-      usage(argv[0], stdout);
-      return 0;
-    }
-  }
-
-  if(argc < optind+2) {
-    usagefail(argv[0]);
-    return;
-  }
-
-  
   if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
     perror("creating socket failed");
     return 1;
   }
 
-  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, "lo", 2) < 0) {
+  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)) < 0) {
     perror("binding to device failed");
     return 1;
   }
@@ -185,30 +221,86 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  iface->sock = sock;
+  *(iface->addr) = bind_addr;
+  add_interface(iface);
+
+  return 0;
+}
+
+
+int main(int argc, char** argv) {
+
+  fd_set fdset;
+  int max_fd;
+  int num_ready;
+  extern int optind;
+  struct interface* iface;
+  int c;
+
+  if(argc <= 0) {
+    usagefail(NULL);
+    return 1;
+  }
+
+  while((c = getopt(argc, argv, "vh")) != -1) {
+    switch (c) { 
+    case 'v': 
+      printf("Verbose mode enabled\n");
+      verbose = 1; 
+      break; 
+    case 'h':
+      usage(argv[0], stdout);
+      return 0;
+    }
+  }
+
+  if(argc < optind + 1) {
+    usagefail(argv[0]);
+    return;
+  }
+
+  monitor_interface("lo", "100.64.2.3", "255.255.255.192");
+
   printf("Listening for requests\n");
 
   for(;;) {
+
+    // initialize fdset
     FD_ZERO(&fdset);
-    FD_SET(sock, &fdset);
-    if((num_ready = select(sock + 1, &fdset, NULL, NULL, NULL)) < 0) {
+    max_fd = 0;
+    iface = interfaces;
+    do {
+      FD_SET(iface->sock, &fdset);
+      if(iface->sock > max_fd) {
+        max_fd = iface->sock;
+      }
+    } while(iface = iface->next);
+
+    if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
         printf("huh?\n");
         continue;
       }
       perror("error during select");
     }
-    printf("select returned\n");
 
-    if(FD_ISSET(sock, &fdset)) {
-      printf("Request received!\n");
-      if(handle_incoming(sock, &bind_addr) < 0) {
-        perror("error handling incoming packet");
-      } else {
-        printf("Response sent!\n");
+    iface = interfaces;
+    do {
+      if(FD_ISSET(iface->sock, &fdset)) {
+        if(verbose) {
+          printf("Packet received on interface %s\n", iface->ifname);
+        }
+
+        if(handle_incoming(iface) < 0) {
+          perror("Error handling incoming packet");
+        } else {
+          printf("Response sent!\n");
+        }
+
       }
-    }
-  }
-
+    } while(iface = iface->next);
+  }  
   
   return 0;
 }
