@@ -26,7 +26,7 @@ struct interface {
   char* ip;
   char* netmask;
   int sock;
-  struct sockaddr_in* addr;
+  struct sockaddr_in addr;
   struct interface* next;
 };
 
@@ -131,6 +131,7 @@ void usagefail(char* command_name) {
 
 struct interface* new_interface() {
   struct interface* iface = (struct interface*) malloc(sizeof(struct interface));
+  
   return iface;
 }
 
@@ -193,6 +194,7 @@ int monitor_interface(struct interface* iface) {
     return -1;
   }
 
+
   broadcast_perm = 1;
   if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
     perror("setting broadcast permission on socket failed");
@@ -210,8 +212,12 @@ int monitor_interface(struct interface* iface) {
   }
 
   iface->sock = sock;
-  *(iface->addr) = bind_addr;
+  iface->addr = bind_addr;
   add_interface(iface);
+
+  printf("Listening on interface %s:\n", iface->ifname);
+  printf("  client IP: %s\n", iface->ip);
+  printf("  client netmask %s\n\n", iface->netmask);
 
   return 0;
 }
@@ -271,8 +277,6 @@ int parse_args(int argc, char** argv) {
   
   int i;
   for(i=0; i < argc; i++) {
-    printf("opts: %s\n", argv[0]);
-
     parse_arg(argv[i]);
   }
 
@@ -313,7 +317,7 @@ int main(int argc, char** argv) {
 
   parse_args(argc - optind, argv + optind);
 
-  printf("Listening for requests\n");
+  printf("Ready.\n");
 
   for(;;) {
 
