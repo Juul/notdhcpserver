@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 
 #define PASSWORD_LENGTH (16)
+#define MAX_CERT_SIZE (16384)
 
 // structs below
 
@@ -39,6 +40,7 @@ struct response {
   uint32_t lease_ip;
   uint32_t lease_netmask;
   char password[PASSWORD_LENGTH];
+  uint32_t cert_size;
 };
 
 // global variables below
@@ -47,6 +49,7 @@ int verbose = 0;
 int src_port = 4242;
 int dest_port = 4243;
 struct interface* interfaces = NULL;
+char* ssl_cert = NULL;
 
 // functions declarations below
 
@@ -68,18 +71,29 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
       return -1;
     }
   }
+  free(buffer);
   return 0;
 }
 
 int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
   struct response resp;
+  void* sendbuf;
 
   resp.type = 42;
   resp.lease_ip = inet_addr(lease_ip);
   resp.lease_netmask = inet_addr(lease_netmask);
   memcpy(resp.password, password, PASSWORD_LENGTH);
+  if(!ssl_cert) {
+    resp.cert_size = 0;
+    sendbuf = (void*) &resp;
+  } else {
+    resp.cert_size = strlen(ssl_cert);
+    sendbuf = malloc(sizeof(resp) + resp.cert_size);
+    memcpy(sendbuf, &resp, sizeof(resp));
+    memcpy(sendbuf+sizeof(resp), ssl_cert, resp.cert_size);
+  }
   
-  return broadcast_packet(sock, (void*) &resp, sizeof(resp));
+  return broadcast_packet(sock, sendbuf, sizeof(resp));
 }
 
 int handle_incoming(struct interface* iface) {
@@ -111,7 +125,7 @@ void usage(char* command_name, FILE* out) {
   if(!command_name) {
     command_name = (char*) &default_command_name;
   }
-  fprintf(out, "Usage: %s [-v] ifname=ip [ifname2=ip2 ...]\n", command_name);
+  fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -v: Enable verbose mode\n");
   fprintf(out, "  -h: This help text\n");
@@ -119,7 +133,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "For each interface where you want nodhcpserver to hand out an IP \"lease\"\n");
   fprintf(out, "specify an interface+ip pair. E.g:\n");
   fprintf(out, "\n");
-  fprintf(out, "  %s eth0.2=100.64.0.2 eth0.3=100.64.0.3\n", command_name);
+  fprintf(out, "  %s eth0.2=100.64.0.2/255.255.255.192 eth0.3=100.64.0.3/255.255.255.192\n", command_name);
   fprintf(out, "\n");
 }
 
@@ -135,20 +149,6 @@ struct interface* new_interface() {
   return iface;
 }
 
-/*
-struct interface* get_interface_by_sock(int sock) {
-  struct interface* iface;
-  iface = interfaces;
-  do {
-    if(iface->sock == sock) {
-      return iface;
-    }
-  } while(iface = iface->next);
-
-  return NULL;
-}
-*/
-
 // add interface to linked list and return the previous end of the linked list
 struct interface* add_interface(struct interface* iface) {
   struct interface* cur = interfaces;
@@ -163,7 +163,6 @@ struct interface* add_interface(struct interface* iface) {
   }
   return cur;
 }
-
 
 int monitor_interface(struct interface* iface) {
 
@@ -193,7 +192,6 @@ int monitor_interface(struct interface* iface) {
     perror("failed to set non-blocking mode for socket");
     return -1;
   }
-
 
   broadcast_perm = 1;
   if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
@@ -283,6 +281,39 @@ int parse_args(int argc, char** argv) {
   return 0;
 }
 
+char* load_cert(char* path) {
+  FILE* f;
+  char* buf = malloc(MAX_CERT_SIZE);
+  size_t bytes_read;
+
+  f = fopen(path, "r");
+  if(!f) {
+    perror("Opening certificate file failed");
+    return NULL;
+  }
+
+  bytes_read = fread(buf, 1, MAX_CERT_SIZE, f);
+  if(ferror(f)) {
+    perror("Error reading certificate file");
+    return NULL;
+  }
+  if(bytes_read <= 0) {
+    fprintf(stderr, "Reading certificate file failed. Is the file empty?\n");
+    return NULL;
+  }
+
+  if(fclose(f) == EOF) {
+    fprintf(stderr, "Closing certificate file failed.\n");
+    return NULL;
+  }
+
+  if(verbose) {
+    printf("Loaded SSL certificate from %s\n", path);
+  }
+
+  return buf;
+}
+
 
 int main(int argc, char** argv) {
 
@@ -298,8 +329,14 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  while((c = getopt(argc, argv, "vh")) != -1) {
-    switch (c) { 
+  while((c = getopt(argc, argv, "c:vh")) != -1) {
+    switch (c) {
+    case 'c':
+      ssl_cert = load_cert(optarg);
+      if(!ssl_cert) {
+        return 1;
+      }
+      break;
     case 'v': 
       printf("Verbose mode enabled\n");
       verbose = 1; 
@@ -334,7 +371,7 @@ int main(int argc, char** argv) {
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
-        printf("huh?\n");
+        printf("huh?\n"); // TODO when does this happen
         continue;
       }
       perror("error during select");

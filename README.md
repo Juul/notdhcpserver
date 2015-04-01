@@ -22,7 +22,11 @@ When an extender node receives a response, it will run the script specified with
 
 * Make server send response three times with small delay between each (UDP is unreliable after all)
 * Include a checksum in server response
+* Include SSL certificate in server response
 
+# Limitations
+
+* The file of the certificate file must be less than 16 kB. This can be changed by changing MAX_CERT_SIZE in main.c and recompiling.
 # License and copyright
 
 This software is licensed under the GNU General Public License v3.0
