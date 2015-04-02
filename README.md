@@ -22,7 +22,9 @@ When an extender node receives a response, it will run the script specified with
 
 * Make server send response three times with small delay between each (UDP is unreliable after all)
 * Include a checksum in server response
-* Include SSL certificate in server response
+* Generate randomized password
+* Make server listen for ACK from client
+* Make server stop listening on an interface when ACK has been received and then only start listening again after a physical ethernet disconnect and connect.
 
 # Limitations
 
