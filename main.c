@@ -17,7 +17,6 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 
-#define PASSWORD_LENGTH (16)
 #define MAX_CERT_SIZE (16384)
 
 // structs below
@@ -39,7 +38,6 @@ struct response {
   uint32_t type;
   uint32_t lease_ip;
   uint32_t lease_netmask;
-  char password[PASSWORD_LENGTH];
   uint32_t cert_size;
 };
 
@@ -55,66 +53,73 @@ char* ssl_cert = NULL;
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
   struct sockaddr_in broadcast_addr;
-  int attempts = 3;
+  int sent = 0;
+  int ret;
+  int max;
 
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
   broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
   broadcast_addr.sin_port = htons(dest_port);
 
-  while(sendto(sock, buffer, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr)) != len) {
-    // failed to send entire packet
-    if(--attempts) {
-      fprintf(stderr, "broadcast failed after several attempts\n");
-      usleep(200000);
-    } else {
-      return -1;
+  while(sent < len) {
+    ret = sendto(sock, buffer + sent, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
+    if(ret < 0) {
+      return ret;
     }
+    sent += ret;
   }
-  free(buffer);
+
   return 0;
 }
 
-int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
+int send_response(int sock, char* lease_ip, char* lease_netmask) {
   struct response resp;
   void* sendbuf;
+  int ret;
 
   resp.type = 42;
   resp.lease_ip = inet_addr(lease_ip);
   resp.lease_netmask = inet_addr(lease_netmask);
-  memcpy(resp.password, password, PASSWORD_LENGTH);
+
   if(!ssl_cert) {
     resp.cert_size = 0;
-    sendbuf = (void*) &resp;
-  } else {
-    resp.cert_size = strlen(ssl_cert);
-    sendbuf = malloc(sizeof(resp) + resp.cert_size);
-    memcpy(sendbuf, &resp, sizeof(resp));
-    memcpy(sendbuf+sizeof(resp), ssl_cert, resp.cert_size);
+    return broadcast_packet(sock, (void*) &resp, sizeof(resp));
   }
-  
-  return broadcast_packet(sock, sendbuf, sizeof(resp));
+
+  resp.cert_size = strlen(ssl_cert);
+  sendbuf = malloc(sizeof(resp) + resp.cert_size);
+  memcpy(sendbuf, &resp, sizeof(resp));
+  memcpy(sendbuf+sizeof(resp), ssl_cert, resp.cert_size);
+  ret = broadcast_packet(sock, sendbuf, sizeof(resp) + resp.cert_size);
+
+  free(sendbuf);
+  return ret;
 }
 
 int handle_incoming(struct interface* iface) {
   struct request req;
   ssize_t ret;
-  ssize_t received = 0;
   socklen_t addrlen = sizeof(iface->addr);
   
-  while(received < sizeof(req)) {
-    ret = recvfrom(iface->sock, &req, sizeof(req), 0, (struct sockaddr*) &(iface->addr), &addrlen);
-    if(ret < 0) {
-      perror("error receiving packet");
-      break;
-    }
-    received += ret;
+  ret = recvfrom(iface->sock, &req, sizeof(req), 0, (struct sockaddr*) &(iface->addr), &addrlen);
+  if(ret < 0) {
+    perror("error receiving packet");
+    return -1;
+  }
+
+  // ignore partially received packets
+  if(ret < sizeof(req)) {
+    return -1;
   }
   
-  // TODO this is just an example response
   if(req.type == 42) {
-    return send_response(iface->sock, iface->ip, iface->netmask,  "0123456701234567");
+    return send_response(iface->sock, iface->ip, iface->netmask);
   }
+
+  //  if(req.type == 43) {
+  //    return stop_listening(iface);
+  //  }
 
   return -1;
 }
@@ -265,7 +270,9 @@ int parse_arg(char* arg) {
     return -1;
   }
 
-  monitor_interface(iface);
+  if(monitor_interface(iface) < 0) {
+    return -1;
+  }
   
   return 0;
 }
@@ -275,7 +282,9 @@ int parse_args(int argc, char** argv) {
   
   int i;
   for(i=0; i < argc; i++) {
-    parse_arg(argv[i]);
+    if(parse_arg(argv[i]) < 0) {
+      return -1;
+    }
   }
 
   return 0;
@@ -326,7 +335,7 @@ int main(int argc, char** argv) {
 
   if(argc <= 0) {
     usagefail(NULL);
-    return 1;
+    exit(1);
   }
 
   while((c = getopt(argc, argv, "c:vh")) != -1) {
@@ -334,7 +343,7 @@ int main(int argc, char** argv) {
     case 'c':
       ssl_cert = load_cert(optarg);
       if(!ssl_cert) {
-        return 1;
+        exit(1);
       }
       break;
     case 'v': 
@@ -343,16 +352,18 @@ int main(int argc, char** argv) {
       break; 
     case 'h':
       usage(argv[0], stdout);
-      return 0;
+      exit(0);
     }
   }
 
   if(argc < optind + 1) {
     usagefail(argv[0]);
-    return;
+    exit(1);
   }
 
-  parse_args(argc - optind, argv + optind);
+  if(parse_args(argc - optind, argv + optind) < 0) {
+    exit(1);
+  }
 
   printf("Ready.\n");
 

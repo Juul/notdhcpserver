@@ -25,6 +25,8 @@ When an extender node receives a response, it will run the script specified with
 * Generate randomized password
 * Make server listen for ACK from client
 * Make server stop listening on an interface when ACK has been received and then only start listening again after a physical ethernet disconnect and connect.
+* Deal with network byte order vs host byte order
+
 
 # Limitations
 
