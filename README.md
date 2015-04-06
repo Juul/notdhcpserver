@@ -25,11 +25,6 @@ When the home node receives an ack it will run the script specified with -s on t
 
 ## TODO
 
-Immediate:
-
-* Deal with network byte order vs host byte order
-* Include a checksum in server response
-
 Future:
 
 * IPv6 support
@@ -49,9 +44,7 @@ When an extender node receives a response, it will run the script specified with
 
 Immediate:
 
-* Deal with network byte order vs host byte order
-* Checksum verification
-* Add timeout so it abandons an incoming message if no data is received for a long time 
+* Add timeout so it abandons an incoming message if no data is received for a few seconds
 * Make -v actually do something
 
 Future:

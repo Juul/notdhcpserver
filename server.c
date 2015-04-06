@@ -17,6 +17,7 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 
+#include "crc32.h"
 #include "protocol.h"
 #include "phyconnect.h"
 
@@ -108,23 +109,30 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   return 0;
 }
 
+void add_crc(struct response* resp, size_t len) {
+  resp->crc = htonl(crc32((char*) (resp + sizeof(resp->crc)), len - sizeof(resp->crc)));
+}
+
 int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
   struct response resp;
   void* sendbuf;
   int ret;
 
-  resp.type = RESPONSE_TYPE;
-  resp.lease_ip = inet_addr(lease_ip);
-  resp.lease_netmask = inet_addr(lease_netmask);
+  resp.type = htonl(RESPONSE_TYPE);
+  resp.lease_ip = htonl(inet_addr(lease_ip));
+  resp.lease_netmask = htonl(inet_addr(lease_netmask));
   strncpy((char*) &(resp.password), password, PASSWORD_LENGTH + 1);
 
   if(!ssl_cert || !ssl_key) {
     resp.cert_size = 0;
+    add_crc(&resp, sizeof(resp));
+    printf("CRC: %uld\n", resp.crc);
     return broadcast_packet(sock, (void*) &resp, sizeof(resp));
   }
 
-  resp.cert_size = strlen(ssl_cert) + 1;
-  resp.key_size = strlen(ssl_key) + 1;
+  resp.cert_size = htonl(strlen(ssl_cert) + 1);
+  resp.key_size = htonl(strlen(ssl_key) + 1);
+
   sendbuf = malloc(sizeof(resp) + resp.cert_size + resp.key_size);
   memcpy(sendbuf, &resp, sizeof(resp));
 
@@ -140,7 +148,8 @@ int send_response(int sock, char* lease_ip, char* lease_netmask, char* password)
   // ensure null-terminated key string
   ((char*) sendbuf)[sizeof(resp) + resp.cert_size + resp.key_size - 1] = '\0';
 
-  ret = broadcast_packet(sock, sendbuf, sizeof(resp) + resp.cert_size);
+  add_crc(&resp, sizeof(resp) + resp.cert_size + resp.key_size);
+  ret = broadcast_packet(sock, sendbuf, sizeof(resp) + resp.cert_size + resp.key_size);
 
   free(sendbuf);
 

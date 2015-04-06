@@ -17,6 +17,7 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 
+#include "crc32.h"
 #include "protocol.h"
 #include "phyconnect.h"
 
@@ -39,6 +40,10 @@ char* ssl_cert_path = NULL; // where to write ssl cert
 char* ssl_key_path = NULL; // where to write ssl key
 
 // functions declarations below
+
+uint32_t calc_crc(struct response* resp, size_t len) {
+  return crc32((char*) (resp + sizeof(resp->crc)), len - sizeof(resp->crc));
+}
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
   struct sockaddr_in broadcast_addr;
@@ -64,7 +69,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
 int send_request(int sock) {
   struct request req;
 
-  req.type = REQUEST_TYPE_GETLEASE;
+  req.type = htonl(REQUEST_TYPE_GETLEASE);
   
   return broadcast_packet(sock, (void*) &req, sizeof(req));
 }
@@ -84,7 +89,7 @@ int send_triple_ack(int sock) {
   struct request req;
   int times = 3;
 
-  req.type = REQUEST_TYPE_ACK;
+  req.type = htonl(REQUEST_TYPE_ACK);
 
   while(times--) {
     if(broadcast_packet(sock, (void*) &req, sizeof(req)) < 0) {
@@ -167,6 +172,8 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   socklen_t addrlen = sizeof(addr);
   char* cert;
   char* key;
+  int total_size;
+  uint32_t crc;
 
   ret = recvfrom(sock, recvbuf + received, MAX_RESPONSE_SIZE - received, 0, (struct sockaddr*) addr, &addrlen);
   if(ret < 0) {
@@ -185,6 +192,26 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   }
 
   resp = (struct response*) recvbuf;
+
+  total_size = sizeof(resp) + ntohl(resp->cert_size) + ntohl(resp->key_size);
+  crc = calc_crc(resp, total_size);
+  printf("CRC: %uld\n", crc);
+
+  // convert to host byte order
+  resp->crc = ntohl(resp->crc);
+  if(crc != resp->crc) {
+    if(verbose) {
+      printf("CRC wrong (expected %uld but was %uld). Ignoring message.\n", crc, resp->crc);
+    }
+    received = 0;
+    return -1;
+  }
+
+  resp->type = ntohl(resp->type);
+  resp->lease_ip = ntohl(resp->lease_ip);
+  resp->lease_netmask = ntohl(resp->lease_netmask);
+  resp->cert_size = ntohl(resp->cert_size);
+  resp->key_size = ntohl(resp->key_size);
 
   if(resp->type != RESPONSE_TYPE) {
     fprintf(stderr, "unknown message type\n");
