@@ -75,12 +75,12 @@ int send_request(int sock) {
 }
 
 
-void run_hook_script(char* ip, char* netmask, char* cert_path, char* key_path) {
+void run_hook_script(char* ip, char* netmask, char* password, char* cert_path, char* key_path) {
   if(!hook_script_path) {
     return;
   }
 
-  if(execl(hook_script_path, listen_ifname, ip, netmask, cert_path, key_path, NULL) < 0) {
+  if(execl(hook_script_path, listen_ifname, ip, netmask, password, cert_path, key_path, NULL) < 0) {
     perror("error running hook script");
   }
 }
@@ -141,9 +141,9 @@ int receive_complete(struct response* resp, char* cert, char* key) {
   }
 
   if(wrote_cert && wrote_key) {
-    run_hook_script(inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), ssl_cert_path, ssl_key_path);
+    run_hook_script(inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), resp->password, ssl_cert_path, ssl_key_path);
   } else {
-    run_hook_script(inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), NULL, NULL);
+    run_hook_script(inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), resp->password, NULL, NULL);
   }
 
   return 0;

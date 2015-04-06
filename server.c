@@ -43,6 +43,34 @@ char* ssl_cert = NULL;
 
 // functions declarations below
 
+int seed_prng() {
+  struct timeval time;
+  
+  if(gettimeofday(&time, NULL) < 0) {
+    perror("seeding prng failed");
+    return -1;
+  }
+  srand(time.tv_usec * time.tv_sec);
+}
+
+// writes a null-terminated password string
+// of size len-1 to a buffer of size len
+// (assumes that buffer has already been allocated)
+void generate_password(char* buffer, int len) {
+  const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJK";
+  int key;
+
+  buffer[--len] = '\0';
+
+  while(len) {
+    key = rand() % (int) (sizeof(charset) - 1);
+    buffer[len - 1] = charset[key];
+    len--;
+  }
+
+  return;
+}
+
 int broadcast_packet(int sock, void* buffer, size_t len) {
   struct sockaddr_in broadcast_addr;
   int sent = 0;
@@ -73,6 +101,7 @@ int send_response(int sock, char* lease_ip, char* lease_netmask) {
   resp.type = 42;
   resp.lease_ip = inet_addr(lease_ip);
   resp.lease_netmask = inet_addr(lease_netmask);
+  generate_password(resp.password, PASSWORD_LENGTH + 1);
 
   if(!ssl_cert) {
     resp.cert_size = 0;
@@ -353,6 +382,10 @@ int main(int argc, char** argv) {
     usagefail(argv[0]);
     exit(1);
   }
+
+  if(seed_prng() < 0) {
+    exit(1);
+  }         
 
   if(parse_args(argc - optind, argv + optind) < 0) {
     exit(1);

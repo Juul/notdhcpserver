@@ -28,6 +28,7 @@ When the home node receives an ack it will run the script specified with -s on t
 Immediate:
 
 * Support sending ssl key
+* Hook script support
 * Make server listen for ACK from client
 * Make server stop listening on an interface when ACK has been received and then only start listening again after a physical ethernet disconnect and connect.
 * Deal with network byte order vs host byte order
@@ -64,18 +65,12 @@ Future:
 
 # Running as daemon
 
-The server and client do not include any functionality for logging to syslog. Instead you must do something like this:
-
-```
-/path/to/notdhcpserver eth0=10.0.0.2/255.0.0.0 &> logger
-```
-
-See the sample init scripts in the init/ directory for more info.
+The server and client currently do not include any functionality for running as a daemon natively. See the sample init scripts in the init/ directory for how to run as a daemon using start-stop-daemon.
 
 # FAQ
 
 * Q: Why did you write this? Why not just use the dnsmasq dhcp server?
-* A: The behaviour we want is very specific. nothdcpserver hands out only one IP per interface and does not keep track of lease time. Every time there is a physical disconnect on the interface the state is reset. Also, dnsmasq uses the IP of each interface to decide which dhcp-range to hand out on that interface. This is problematic since we use the same IP on multiple non-bridged interfaces (and yes this is a real thing that you can safely do). We still use dnsmasq for normal DHCP. We are also handing out an SSL cert but that could possibly have been sent by dnsmasq as the "vender specific information" DHCP option and written to disk using a udhcpc hook script. Lastly, we don't want to give these IPs out to anything that isn't an extender node and we want to run both notdhcpserver and dnsmasq dhcp server on the same interface at the same time such that the interface can work as an extra LAN port until an extender node is plugged in, at which time it will be switched over to become a dedicated extender node port.
+* A: The behaviour we want is very specific. nothdcpserver hands out only one IP per interface and does not keep track of lease time. Every time there is a physical disconnect on the interface the state is reset. dnsmasq uses the IP of each interface to decide which dhcp-range to hand out on that interface. This is problematic since we use the same IP on multiple non-bridged interfaces. We still use dnsmasq for normal DHCP. We are also handing out an SSL cert and key along with the IP. Lastly, we don't want to give these IPs out to anything that isn't an extender node and we want to run both notdhcpserver and dnsmasq dhcp server on the same interface at the same time such that the interface can work as an extra LAN port until an extender node is plugged in, at which time it will be switched over to become a dedicated extender node port.
 
 # License and copyright
 
