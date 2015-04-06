@@ -25,6 +25,11 @@ When the home node receives an ack it will run the script specified with -s on t
 
 ## TODO
 
+Immediate:
+
+* Server exits for no good reason (after receiving ack?)
+* CRC isn't working
+
 Future:
 
 * IPv6 support
@@ -32,7 +37,8 @@ Future:
 ## Limitations
 
 * The server is for handing out one single IP per interface ONLY. This is not a replacement for a real DHCP server. If you're not using the sudo mesh firmware then you probably don't want this.
-* The certificate and key file must each be less than 16 kB. This can be changed by changing MAX_CERT_SIZE in main.c and recompiling.
+* The certificate and key file must each be less than 16 kB. This can be changed by changing MAX_CERT_SIZE and MAX_KEY_SIZE in protocol.h and recompiling.
+* Hook scripts are run with /bin/sh but this can be changed in common.h
 
 # client 
 
@@ -44,6 +50,8 @@ When an extender node receives a response, it will run the script specified with
 
 Immediate:
 
+* CRC isn't working
+* Ensure client stops listening after it has gotten a response and sent an ack
 * Add timeout so it abandons an incoming message if no data is received for a few seconds
 * Make -v actually do something
 

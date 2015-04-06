@@ -20,6 +20,7 @@ unsigned long crc32(char* message, size_t len) {
    crc = 0xFFFFFFFF;
    for(i=0; i < len; i++) {
      byte = message[i];            // Get next byte.
+     //        printf(" %d - %x\n", i, message[i]);
      byte = reverse(byte);         // 32-bit reversal.
      for (j = 0; j <= 7; j++) {    // Do eight times.
        if ((int)(crc ^ byte) < 0)

@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 
 #include "crc32.h"
+#include "common.h"
 #include "protocol.h"
 #include "phyconnect.h"
 
@@ -77,15 +78,17 @@ void generate_password(char* buffer, int len) {
   return;
 }
 
+/*
 void run_hook_script(struct interface* iface, const char* up_or_down) {
   if(!hook_script_path) {
     return;
   }
 
-  if(execl(hook_script_path, iface->ifname, up_or_down, iface->ip, iface->netmask, iface->password, ssl_cert_path, ssl_key_path, NULL) < 0) {
+  if(execl(SHELL_COMMAND, hook_script_path, iface->ifname, up_or_down, iface->ip, iface->netmask, iface->password, ssl_cert_path, ssl_key_path, NULL) < 0) {
     perror("error running hook script");
   }
 }
+*/
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
   struct sockaddr_in broadcast_addr;
@@ -96,7 +99,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
   broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = htons(CLIENT_PORT);
+  broadcast_addr.sin_port = CLIENT_PORT;
 
   while(sent < len) {
     ret = sendto(sock, buffer + sent, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
@@ -110,12 +113,15 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
 }
 
 void add_crc(struct response* resp, size_t len) {
-  resp->crc = htonl(crc32((char*) (resp + sizeof(resp->crc)), len - sizeof(resp->crc)));
+  resp->crc = htonl(crc32((char*) resp + sizeof(resp->crc), len - sizeof(resp->crc)));
 }
 
 int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
   struct response resp;
   void* sendbuf;
+  int response_size;
+  int cert_size;
+  int key_size;
   int ret;
 
   resp.type = htonl(RESPONSE_TYPE);
@@ -125,31 +131,40 @@ int send_response(int sock, char* lease_ip, char* lease_netmask, char* password)
 
   if(!ssl_cert || !ssl_key) {
     resp.cert_size = 0;
+    resp.key_size = 0;
     add_crc(&resp, sizeof(resp));
     printf("CRC: %uld\n", resp.crc);
     return broadcast_packet(sock, (void*) &resp, sizeof(resp));
   }
 
-  resp.cert_size = htonl(strlen(ssl_cert) + 1);
-  resp.key_size = htonl(strlen(ssl_key) + 1);
+  cert_size = strlen(ssl_cert) + 1;
+  key_size = strlen(ssl_key) + 1;
 
-  sendbuf = malloc(sizeof(resp) + resp.cert_size + resp.key_size);
+  resp.cert_size = htonl(cert_size);
+  resp.key_size = htonl(key_size);
+
+  sendbuf = malloc(sizeof(resp) + cert_size + key_size);
   memcpy(sendbuf, &resp, sizeof(resp));
 
   // copy ssl cert into buffer
-  memcpy(sendbuf+sizeof(resp), ssl_cert, resp.cert_size);
+  memcpy(sendbuf+sizeof(resp), ssl_cert, cert_size);
 
   // ensure null-terminated key string
-  ((char*) sendbuf)[sizeof(resp) + resp.cert_size - 1] = '\0';
+  ((char*) sendbuf)[sizeof(resp) + cert_size - 1] = '\0';
 
   // copy ssl key into buffer
-  memcpy(sendbuf + sizeof(resp) + resp.cert_size, ssl_key, resp.key_size);
+  memcpy(sendbuf + sizeof(resp) + cert_size, ssl_key, key_size);
 
   // ensure null-terminated key string
-  ((char*) sendbuf)[sizeof(resp) + resp.cert_size + resp.key_size - 1] = '\0';
+  ((char*) sendbuf)[sizeof(resp) + cert_size + key_size - 1] = '\0';
 
-  add_crc(&resp, sizeof(resp) + resp.cert_size + resp.key_size);
-  ret = broadcast_packet(sock, sendbuf, sizeof(resp) + resp.cert_size + resp.key_size);
+  response_size = sizeof(resp) + cert_size + key_size;
+
+  printf("total size: %d\n", response_size);
+
+  add_crc(&resp, response_size);
+  //  printf("CRC: %lu\n", resp.crc);
+  ret = broadcast_packet(sock, sendbuf, response_size);
 
   free(sendbuf);
 
@@ -173,6 +188,8 @@ int handle_incoming(struct interface* iface) {
     return -1;
   }
   
+  req.type = ntohl(req.type);
+
   if(req.type == REQUEST_TYPE_GETLEASE) {
 
     generate_password(iface->password, PASSWORD_LENGTH + 1);
@@ -182,9 +199,11 @@ int handle_incoming(struct interface* iface) {
 
   if(req.type == REQUEST_TYPE_ACK) {
     iface->state = STATE_GOT_ACK;
-    run_hook_script(iface, "up");
+    run_hook_script(hook_script_path, iface, "up");
     return 0;
   }
+
+  fprintf(stderr, "Got unknown request type\n");
 
   return -1;
 }
@@ -250,11 +269,12 @@ int monitor_interface(struct interface* iface) {
     return -1;
   }
 
+  
   if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, iface->ifname, strlen(iface->ifname)) < 0) {
     perror("binding to device failed");
     return -1;
   }
-
+  
   sockmode = fcntl(sock, F_GETFL, 0);
   if(sockmode < 0) {
     perror("error getting socket mode");
@@ -275,7 +295,7 @@ int monitor_interface(struct interface* iface) {
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
   bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  bind_addr.sin_port = htons(SERVER_PORT);
+  bind_addr.sin_port = SERVER_PORT;
 
   if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
     perror("failed to bind udp socket");
@@ -411,7 +431,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       // so we're ready for new requests
       if(iface->state != STATE_LISTENING) {
         iface->state = STATE_LISTENING;
-        run_hook_script(iface, "down");
+        run_hook_script(hook_script_path, iface, "down");
         return;
       }
     }
@@ -433,7 +453,7 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:s:vh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:vh")) != -1) {
     switch (c) {
     case 's':
       hook_script_path = optarg;
@@ -521,6 +541,8 @@ int main(int argc, char** argv) {
       perror("error during select");
     }
 
+    printf("got stuff\n");
+
     if(FD_ISSET(nlsock, &fdset)) {
       netlink_handle_incoming(nlsock, physical_ethernet_state_change);
     }
@@ -533,7 +555,7 @@ int main(int argc, char** argv) {
         }
 
         if(handle_incoming(iface) < 0) {
-          perror("Error handling incoming packet");
+          fprintf(stderr, "Error handling incoming packet\n");
         } else {
           printf("Response sent!\n");
         }

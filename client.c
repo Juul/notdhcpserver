@@ -18,6 +18,7 @@
 #include <linux/rtnetlink.h>
 
 #include "crc32.h"
+#include "common.h"
 #include "protocol.h"
 #include "phyconnect.h"
 
@@ -42,7 +43,7 @@ char* ssl_key_path = NULL; // where to write ssl key
 // functions declarations below
 
 uint32_t calc_crc(struct response* resp, size_t len) {
-  return crc32((char*) (resp + sizeof(resp->crc)), len - sizeof(resp->crc));
+  return crc32((char*) (resp) + sizeof(resp->crc), len - sizeof(resp->crc));
 }
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
@@ -52,7 +53,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
   broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = htons(SERVER_PORT);
+  broadcast_addr.sin_port = SERVER_PORT;
 
   while(sendto(sock, buffer, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr)) != len) {
     // failed to send entire packet
@@ -75,15 +76,21 @@ int send_request(int sock) {
 }
 
 
+  /*
 void run_hook_script(const char* up_or_down, char* ip, char* netmask, char* password, char* cert_path, char* key_path) {
+  char* cmd;
   if(!hook_script_path) {
     return;
   }
 
-  if(execl(hook_script_path, listen_ifname, up_or_down, ip, netmask, password, cert_path, key_path, NULL) < 0) {
+  
+
+
+  if(execl(SHELL_COMMAND, hook_script_path, listen_ifname, up_or_down, ip, netmask, password, cert_path, key_path, NULL) < 0) {
     perror("error running hook script");
   }
 }
+  */
 
 int send_triple_ack(int sock) {
   struct request req;
@@ -101,24 +108,32 @@ int send_triple_ack(int sock) {
 }
 
 int receive_complete(int sock, struct response* resp, char* cert, char* key) {
-  struct in_addr tmp_addr;
+  struct in_addr ip_addr;
+  struct in_addr subnet_addr;
   FILE* out;
   size_t written;
   int wrote_cert = 0;
   int wrote_key = 0;
-  
+
+  ip_addr.s_addr = (unsigned long) resp->lease_ip;
+  subnet_addr.s_addr = (unsigned long) resp->lease_netmask;
+
   printf("Response received:\n");
   printf("  type: %d\n", resp->type);
-  tmp_addr.s_addr = (unsigned long) resp->lease_ip;
-  printf("  lease_ip: %s\n", inet_ntoa(tmp_addr));
-  tmp_addr.s_addr = (unsigned long) resp->lease_netmask;
-  printf("  lease_subnet: %s\n", inet_ntoa(tmp_addr));
+  printf("  lease_ip: %s\n", inet_ntoa(ip_addr));
+  printf("  lease_subnet: %s\n", inet_ntoa(subnet_addr));
   printf("  cert size: %d\n", resp->cert_size);
   
   if(cert) {
-    printf("  cert: %s\n", cert);
+    printf("  cert:\n%s\n", cert);
   } else {
     printf("  cert: No certificate sent\n");
+  }
+
+  if(key) {
+    printf("  key:\n%s\n", key);
+  } else {
+    printf("  key: No key sent\n");
   }
 
   if(send_triple_ack(sock) < 0) {
@@ -134,8 +149,8 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
       perror("failed to write SSL cert");
     }
     written = fwrite(cert, 1, resp->cert_size - 1, out);
-    if(written != resp->cert_size) {
-      perror("failed to write SSL cert");
+    if(written != (resp->cert_size - 1)) {
+      fprintf(stderr, "failed to write SSL cert: incomplete write\n");
     } else {
       wrote_cert = 1;
     }
@@ -149,8 +164,8 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
       perror("failed to write SSL key");
     }
     written = fwrite(key, 1, resp->key_size - 1, out);
-    if(written != resp->key_size) {
-      perror("failed to write SSL key");
+    if(written != (resp->key_size - 1)) {
+      fprintf(stderr, "failed to write SSL key: incomplete write\n");
     } else {
       wrote_cert = 1;
     }
@@ -158,9 +173,9 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   }
 
   if(wrote_cert && wrote_key) {
-    run_hook_script("up", inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), resp->password, ssl_cert_path, ssl_key_path);
+    run_hook_script(hook_script_path, "up", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, ssl_cert_path, ssl_key_path);
   } else {
-    run_hook_script("down", inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), resp->password, NULL, NULL);
+    run_hook_script(hook_script_path, "down", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, NULL, NULL);
   }
 
   return 0;
@@ -193,20 +208,24 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
 
   resp = (struct response*) recvbuf;
 
-  total_size = sizeof(resp) + ntohl(resp->cert_size) + ntohl(resp->key_size);
+  total_size = sizeof(struct response) + ntohl(resp->cert_size) + ntohl(resp->key_size);
+
+
   crc = calc_crc(resp, total_size);
-  printf("CRC: %uld\n", crc);
+  //  printf("CRC: %lu\n", crc);
 
   // convert to host byte order
+  /*
   resp->crc = ntohl(resp->crc);
+
   if(crc != resp->crc) {
     if(verbose) {
-      printf("CRC wrong (expected %uld but was %uld). Ignoring message.\n", crc, resp->crc);
+      printf("CRC wrong (expected %lu but was %lu). Ignoring message.\n", (unsigned long int) crc, (unsigned long int) resp->crc);
     }
     received = 0;
     return -1;
   }
-
+  */
   resp->type = ntohl(resp->type);
   resp->lease_ip = ntohl(resp->lease_ip);
   resp->lease_netmask = ntohl(resp->lease_netmask);
@@ -265,7 +284,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
     printf("  %s state: down\n", ifname);
     if(state != STATE_DISCONNECTED) {
       state = STATE_DISCONNECTED;
-      run_hook_script("down", NULL, NULL, NULL, NULL, NULL);
+      run_hook_script(hook_script_path, "down", NULL, NULL, NULL, NULL, NULL);
     }
   }
 
@@ -281,7 +300,7 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
     return -1;
   }
 
-  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, 2) < 0) {
+  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)) < 0) {
     perror("binding to device failed");
     return -1;
   }
@@ -397,7 +416,7 @@ int main(int argc, char** argv) {
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
   bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  bind_addr.sin_port = htons(CLIENT_PORT);
+  bind_addr.sin_port = CLIENT_PORT;
 
   sock = open_socket(listen_ifname, &bind_addr);
   if(sock < 0) {
