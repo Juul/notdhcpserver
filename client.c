@@ -23,19 +23,14 @@
 // how often to send request (in seconds)
 #define SEND_REQUEST_EVERY (2)
 
-// how big is an ssl cert allowed to be (in bytes)
-#define MAX_CERT_SIZE (65536)
-
 #define STATE_DISCONNECTED (0)
 #define STATE_CONNECTED (1)
 #define STATE_DONE (2)
 
 // global variables below
 
-int src_port = 4243;
-int dest_port = 4242;
 int received = 0; // how much of current message has been received
-char recvbuf[sizeof(struct response) + MAX_CERT_SIZE + 1];
+char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
 int state = STATE_DISCONNECTED; // track state
 int verbose = 0;
 char* hook_script_path = NULL;
@@ -52,7 +47,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
   broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = htons(dest_port);
+  broadcast_addr.sin_port = htons(SERVER_PORT);
 
   while(sendto(sock, buffer, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr)) != len) {
     // failed to send entire packet
@@ -69,7 +64,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
 int send_request(int sock) {
   struct request req;
 
-  req.type = 42;
+  req.type = REQUEST_TYPE_GETLEASE;
   
   return broadcast_packet(sock, (void*) &req, sizeof(req));
 }
@@ -116,7 +111,7 @@ int receive_complete(struct response* resp, char* cert, char* key) {
     if(!out) {
       perror("failed to write SSL cert");
     }
-    written = fwrite(cert, 1, resp->cert_size, out);
+    written = fwrite(cert, 1, resp->cert_size - 1, out);
     if(written != resp->cert_size) {
       perror("failed to write SSL cert");
     } else {
@@ -131,7 +126,7 @@ int receive_complete(struct response* resp, char* cert, char* key) {
     if(!out) {
       perror("failed to write SSL key");
     }
-    written = fwrite(key, 1, resp->key_size, out);
+    written = fwrite(key, 1, resp->key_size - 1, out);
     if(written != resp->key_size) {
       perror("failed to write SSL key");
     } else {
@@ -154,8 +149,9 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   ssize_t ret;
   socklen_t addrlen = sizeof(addr);
   char* cert;
+  char* key;
 
-  ret = recvfrom(sock, recvbuf + received, sizeof(struct response) + MAX_CERT_SIZE - received, 0, (struct sockaddr*) addr, &addrlen);
+  ret = recvfrom(sock, recvbuf + received, MAX_RESPONSE_SIZE - received, 0, (struct sockaddr*) addr, &addrlen);
   if(ret < 0) {
     if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
       printf("would block\n");
@@ -173,36 +169,50 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
 
   resp = (struct response*) recvbuf;
 
-  if(resp->type != 42) {
+  if(resp->type != RESPONSE_TYPE) {
     fprintf(stderr, "unknown message type\n");
     return -1;
   }
 
-  if(resp->cert_size == 0) {
+  if((resp->cert_size == 0) && (resp->key_size == 0)) {
     received = 0;
     return receive_complete(resp, NULL, NULL);
   }
 
   if(resp->cert_size > MAX_CERT_SIZE) {
-    fprintf(stderr, "server trying to send certificate that's too big\n");
+    fprintf(stderr, "server trying to send SSL certificate that's too big\n");
+    received = 0;
+    return -1;
+  }
+
+  if(resp->key_size > MAX_KEY_SIZE) {
+    fprintf(stderr, "server trying to send SSL key that's too big\n");
     received = 0;
     return -1;
   }
   
   // There is still more to receive
-  if(received < (sizeof(struct response) + resp->cert_size)) {
+  if(received < (sizeof(struct response) + resp->cert_size + resp->key_size)) {
     return 0;
   }
 
-  received = 0;
-  cert = (char*) recvbuf + sizeof(struct response);
-  cert[resp->cert_size] = '\0';
-  return receive_complete(resp, cert, NULL); // TODO also receive key 
+  received = 0; // reset received counter, ready for next message
 
-  return 0;
+  cert = (char*) recvbuf + sizeof(struct response);
+  cert[resp->cert_size - 1] = '\0';
+
+  key = (char*) recvbuf + sizeof(struct response) + resp->cert_size;
+  key[resp->key_size - 1] = '\0';
+
+  return receive_complete(resp, cert, key); 
 }
 
 void physical_ethernet_state_change(char* ifname, int connected) {
+
+  // ignore events for other interfaces 
+  if(strcmp(ifname, listen_ifname) != 0) {
+    return;
+  }
 
   if(connected && (state == STATE_DISCONNECTED)) {
     printf("  %s state: up\n", ifname);
@@ -340,7 +350,7 @@ int main(int argc, char** argv) {
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
   bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  bind_addr.sin_port = htons(src_port);
+  bind_addr.sin_port = htons(CLIENT_PORT);
 
   sock = open_socket(listen_ifname, &bind_addr);
   if(sock < 0) {

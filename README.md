@@ -27,10 +27,7 @@ When the home node receives an ack it will run the script specified with -s on t
 
 Immediate:
 
-* Support sending ssl key
 * Hook script support
-* Make server listen for ACK from client
-* Make server stop listening on an interface when ACK has been received and then only start listening again after a physical ethernet disconnect and connect.
 * Deal with network byte order vs host byte order
 * Include a checksum in server response
 
@@ -41,7 +38,7 @@ Future:
 ## Limitations
 
 * The server is for handing out one single IP per interface ONLY. This is not a replacement for a real DHCP server. If you're not using the sudo mesh firmware then you probably don't want this.
-* The file of the certificate file must be less than 64 kB. This can be changed by changing MAX_CERT_SIZE in main.c and recompiling.
+* The certificate and key file must each be less than 16 kB. This can be changed by changing MAX_CERT_SIZE in main.c and recompiling.
 
 # client 
 
@@ -53,8 +50,7 @@ When an extender node receives a response, it will run the script specified with
 
 Immediate:
 
-* Support receiving ssl key
-* Make it send ACK
+* Make it send triple ACK 
 * Deal with network byte order vs host byte order
 * Checksum verification
 * Add timeout so it abandons an incoming message if no data is received for a long time 

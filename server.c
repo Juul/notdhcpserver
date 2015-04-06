@@ -20,8 +20,6 @@
 #include "protocol.h"
 #include "phyconnect.h"
 
-#define MAX_CERT_SIZE (65536)
-
 // structs below
 
 struct interface {
@@ -30,16 +28,19 @@ struct interface {
   char* netmask;
   int sock;
   struct sockaddr_in addr;
+  int state;
   struct interface* next;
 };
+
+#define STATE_LISTENING (0)
+#define STATE_GOT_ACK (1)
 
 // global variables below
 
 int verbose = 0;
-int src_port = 4242;
-int dest_port = 4243;
 struct interface* interfaces = NULL;
 char* ssl_cert = NULL;
+char* ssl_key = NULL;
 
 // functions declarations below
 
@@ -80,7 +81,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
   broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = htons(dest_port);
+  broadcast_addr.sin_port = htons(CLIENT_PORT);
 
   while(sent < len) {
     ret = sendto(sock, buffer + sent, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
@@ -98,25 +99,40 @@ int send_response(int sock, char* lease_ip, char* lease_netmask) {
   void* sendbuf;
   int ret;
 
-  resp.type = 42;
+  resp.type = RESPONSE_TYPE;
   resp.lease_ip = inet_addr(lease_ip);
   resp.lease_netmask = inet_addr(lease_netmask);
   generate_password(resp.password, PASSWORD_LENGTH + 1);
 
-  if(!ssl_cert) {
+  if(!ssl_cert || !ssl_key) {
     resp.cert_size = 0;
     return broadcast_packet(sock, (void*) &resp, sizeof(resp));
   }
 
-  resp.cert_size = strlen(ssl_cert);
-  sendbuf = malloc(sizeof(resp) + resp.cert_size);
+  resp.cert_size = strlen(ssl_cert) + 1;
+  resp.key_size = strlen(ssl_key) + 1;
+  sendbuf = malloc(sizeof(resp) + resp.cert_size + resp.key_size);
   memcpy(sendbuf, &resp, sizeof(resp));
+
+  // copy ssl cert into buffer
   memcpy(sendbuf+sizeof(resp), ssl_cert, resp.cert_size);
+
+  // ensure null-terminated key string
+  ((char*) sendbuf)[sizeof(resp) + resp.cert_size - 1] = '\0';
+
+  // copy ssl key into buffer
+  memcpy(sendbuf + sizeof(resp) + resp.cert_size, ssl_key, resp.key_size);
+
+  // ensure null-terminated key string
+  ((char*) sendbuf)[sizeof(resp) + resp.cert_size + resp.key_size - 1] = '\0';
+
   ret = broadcast_packet(sock, sendbuf, sizeof(resp) + resp.cert_size);
 
   free(sendbuf);
+
   return ret;
 }
+
 
 int handle_incoming(struct interface* iface) {
   struct request req;
@@ -129,18 +145,19 @@ int handle_incoming(struct interface* iface) {
     return -1;
   }
 
-  // ignore partially received packets
+  // can't interpret if reqeust type has not been received
   if(ret < sizeof(req)) {
     return -1;
   }
   
-  if(req.type == 42) {
+  if(req.type == REQUEST_TYPE_GETLEASE) {
     return send_response(iface->sock, iface->ip, iface->netmask);
   }
 
-  //  if(req.type == 43) {
-  //    return stop_listening(iface);
-  //  }
+  if(req.type == REQUEST_TYPE_ACK) {
+    iface->state = STATE_GOT_ACK;
+    return 0;
+  }
 
   return -1;
 }
@@ -171,7 +188,7 @@ void usagefail(char* command_name) {
 
 struct interface* new_interface() {
   struct interface* iface = (struct interface*) malloc(sizeof(struct interface));
-  
+
   return iface;
 }
 
@@ -228,7 +245,7 @@ int monitor_interface(struct interface* iface) {
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
   bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  bind_addr.sin_port = htons(src_port);
+  bind_addr.sin_port = htons(SERVER_PORT);
 
   if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
     perror("failed to bind udp socket");
@@ -237,6 +254,8 @@ int monitor_interface(struct interface* iface) {
 
   iface->sock = sock;
   iface->addr = bind_addr;
+  iface->state = STATE_LISTENING;
+
   add_interface(iface);
 
   printf("Listening on interface %s:\n", iface->ifname);
@@ -311,24 +330,24 @@ int parse_args(int argc, char** argv) {
   return 0;
 }
 
-char* load_cert(char* path) {
+char* load_file(char* path, int size) {
   FILE* f;
-  char* buf = malloc(MAX_CERT_SIZE);
+  char* buf = malloc(size);
   size_t bytes_read;
 
   f = fopen(path, "r");
   if(!f) {
-    perror("Opening certificate file failed");
+    perror("Opening certificate or key file failed");
     return NULL;
   }
 
-  bytes_read = fread(buf, 1, MAX_CERT_SIZE, f);
+  bytes_read = fread(buf, 1, size, f);
   if(ferror(f)) {
-    perror("Error reading certificate file");
+    perror("Error reading certificate or key file");
     return NULL;
   }
   if(bytes_read <= 0) {
-    fprintf(stderr, "Reading certificate file failed. Is the file empty?\n");
+    fprintf(stderr, "Reading certificate or key file failed. Is the file empty?\n");
     return NULL;
   }
 
@@ -344,10 +363,32 @@ char* load_cert(char* path) {
   return buf;
 }
 
+void physical_ethernet_state_change(char* ifname, int connected) {
+  struct interface* iface;
+
+  // we don't care about connect events
+  // since we're always listening even during physical disconnect
+  if(connected) {
+    return;
+  }
+  
+  // check if we are monitoring this interface
+  iface = interfaces;
+  do {
+    if(strcmp(iface->ifname, ifname) == 0) {
+      // an interface was physically disconnected
+      // so reset the state to "listening" 
+      // so we're ready for new requests
+      iface->state = STATE_LISTENING;
+      return;
+    }
+  } while(iface = iface->next);
+}
 
 int main(int argc, char** argv) {
 
   fd_set fdset;
+  int nlsock;
   int max_fd;
   int num_ready;
   extern int optind;
@@ -362,8 +403,14 @@ int main(int argc, char** argv) {
   while((c = getopt(argc, argv, "c:vh")) != -1) {
     switch (c) {
     case 'c':
-      ssl_cert = load_cert(optarg);
+      ssl_cert = load_file(optarg, MAX_CERT_SIZE - 1);
       if(!ssl_cert) {
+        exit(1);
+      }
+      break;
+    case 'k':
+      ssl_key = load_file(optarg, MAX_KEY_SIZE - 1);
+      if(!ssl_key) {
         exit(1);
       }
       break;
@@ -383,9 +430,21 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
+  if((ssl_cert && !ssl_key) || (!ssl_cert && ssl_key)) {
+    fprintf(stderr, "If you supply a certificate path then you must also supply a key path and vice versa.\n");
+    usagefail(argv[0]);
+    exit(1);
+  }
+
   if(seed_prng() < 0) {
     exit(1);
   }         
+
+  nlsock = netlink_open_socket();
+  if(nlsock < 0) {
+    fprintf(stderr, "could not open netlink socket\n");
+    exit(1);
+  }
 
   if(parse_args(argc - optind, argv + optind) < 0) {
     exit(1);
@@ -397,14 +456,24 @@ int main(int argc, char** argv) {
 
     // initialize fdset
     FD_ZERO(&fdset);
+
     max_fd = 0;
     iface = interfaces;
     do {
+      // skip ifaces that already got an ACK
+      if(iface->state != STATE_LISTENING) {
+        continue;
+      }
       FD_SET(iface->sock, &fdset);
       if(iface->sock > max_fd) {
         max_fd = iface->sock;
       }
     } while(iface = iface->next);
+
+    FD_SET(nlsock, &fdset);
+    if(nlsock > max_fd) {
+      max_fd = nlsock;
+    }
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
@@ -412,6 +481,10 @@ int main(int argc, char** argv) {
         continue;
       }
       perror("error during select");
+    }
+
+    if(FD_ISSET(nlsock, &fdset)) {
+      netlink_handle_incoming(nlsock, physical_ethernet_state_change);
     }
 
     iface = interfaces;
