@@ -54,6 +54,7 @@ Immediate:
 * Deal with network byte order vs host byte order
 * Checksum verification
 * Add timeout so it abandons an incoming message if no data is received for a long time 
+* Make -v actually do something
 
 Future:
 

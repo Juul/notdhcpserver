@@ -28,6 +28,7 @@ struct interface {
   char* netmask;
   int sock;
   struct sockaddr_in addr;
+  char password[PASSWORD_LENGTH + 1];
   int state;
   struct interface* next;
 };
@@ -39,8 +40,11 @@ struct interface {
 
 int verbose = 0;
 struct interface* interfaces = NULL;
+char* ssl_cert_path = NULL;
 char* ssl_cert = NULL;
+char* ssl_key_path = NULL;
 char* ssl_key = NULL;
+char* hook_script_path = NULL;
 
 // functions declarations below
 
@@ -55,7 +59,7 @@ int seed_prng() {
 }
 
 // writes a null-terminated password string
-// of size len-1 to a buffer of size len
+// of size (len - 1) to a buffer of size len
 // (assumes that buffer has already been allocated)
 void generate_password(char* buffer, int len) {
   const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJK";
@@ -70,6 +74,16 @@ void generate_password(char* buffer, int len) {
   }
 
   return;
+}
+
+void run_hook_script(struct interface* iface, const char* up_or_down) {
+  if(!hook_script_path) {
+    return;
+  }
+
+  if(execl(hook_script_path, iface->ifname, up_or_down, iface->ip, iface->netmask, iface->password, ssl_cert_path, ssl_key_path, NULL) < 0) {
+    perror("error running hook script");
+  }
 }
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
@@ -94,7 +108,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   return 0;
 }
 
-int send_response(int sock, char* lease_ip, char* lease_netmask) {
+int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
   struct response resp;
   void* sendbuf;
   int ret;
@@ -102,7 +116,7 @@ int send_response(int sock, char* lease_ip, char* lease_netmask) {
   resp.type = RESPONSE_TYPE;
   resp.lease_ip = inet_addr(lease_ip);
   resp.lease_netmask = inet_addr(lease_netmask);
-  generate_password(resp.password, PASSWORD_LENGTH + 1);
+  strncpy((char*) &(resp.password), password, PASSWORD_LENGTH + 1);
 
   if(!ssl_cert || !ssl_key) {
     resp.cert_size = 0;
@@ -145,17 +159,21 @@ int handle_incoming(struct interface* iface) {
     return -1;
   }
 
-  // can't interpret if reqeust type has not been received
+  // didn't receive a full request, so just wait for next one to arrive
   if(ret < sizeof(req)) {
     return -1;
   }
   
   if(req.type == REQUEST_TYPE_GETLEASE) {
-    return send_response(iface->sock, iface->ip, iface->netmask);
+
+    generate_password(iface->password, PASSWORD_LENGTH + 1);
+
+    return send_response(iface->sock, iface->ip, iface->netmask, iface->password);
   }
 
   if(req.type == REQUEST_TYPE_ACK) {
     iface->state = STATE_GOT_ACK;
+    run_hook_script(iface, "up");
     return 0;
   }
 
@@ -170,6 +188,9 @@ void usage(char* command_name, FILE* out) {
   }
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
+  fprintf(out, "  -s: Hook script. See readme for more info.\n");  
+  fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
+  fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
   fprintf(out, "  -v: Enable verbose mode\n");
   fprintf(out, "  -h: This help text\n");
   fprintf(out, "\n");
@@ -379,8 +400,11 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       // an interface was physically disconnected
       // so reset the state to "listening" 
       // so we're ready for new requests
-      iface->state = STATE_LISTENING;
-      return;
+      if(iface->state != STATE_LISTENING) {
+        iface->state = STATE_LISTENING;
+        run_hook_script(iface, "down");
+        return;
+      }
     }
   } while(iface = iface->next);
 }
@@ -400,15 +424,20 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:vh")) != -1) {
+  while((c = getopt(argc, argv, "c:s:vh")) != -1) {
     switch (c) {
+    case 's':
+      hook_script_path = optarg;
+      break;
     case 'c':
+      ssl_cert_path = optarg;
       ssl_cert = load_file(optarg, MAX_CERT_SIZE - 1);
       if(!ssl_cert) {
         exit(1);
       }
       break;
     case 'k':
+      ssl_key_path = optarg;
       ssl_key = load_file(optarg, MAX_KEY_SIZE - 1);
       if(!ssl_key) {
         exit(1);
