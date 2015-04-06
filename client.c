@@ -80,7 +80,22 @@ void run_hook_script(const char* up_or_down, char* ip, char* netmask, char* pass
   }
 }
 
-int receive_complete(struct response* resp, char* cert, char* key) {
+int send_triple_ack(int sock) {
+  struct request req;
+  int times = 3;
+
+  req.type = REQUEST_TYPE_ACK;
+
+  while(times--) {
+    if(broadcast_packet(sock, (void*) &req, sizeof(req)) < 0) {
+      return -1;
+    }
+    usleep(100000);
+  }
+  return 0;
+}
+
+int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   struct in_addr tmp_addr;
   FILE* out;
   size_t written;
@@ -101,7 +116,9 @@ int receive_complete(struct response* resp, char* cert, char* key) {
     printf("  cert: No certificate sent\n");
   }
 
-  // TODO send ACK
+  if(send_triple_ack(sock) < 0) {
+    return -1;
+  }
 
   state = STATE_DONE;
 
@@ -176,7 +193,7 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
 
   if((resp->cert_size == 0) && (resp->key_size == 0)) {
     received = 0;
-    return receive_complete(resp, NULL, NULL);
+    return receive_complete(sock, resp, NULL, NULL);
   }
 
   if(resp->cert_size > MAX_CERT_SIZE) {
@@ -204,7 +221,7 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   key = (char*) recvbuf + sizeof(struct response) + resp->cert_size;
   key[resp->key_size - 1] = '\0';
 
-  return receive_complete(resp, cert, key); 
+  return receive_complete(sock, resp, cert, key); 
 }
 
 void physical_ethernet_state_change(char* ifname, int connected) {

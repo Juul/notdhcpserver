@@ -27,7 +27,6 @@ When the home node receives an ack it will run the script specified with -s on t
 
 Immediate:
 
-* Hook script support
 * Deal with network byte order vs host byte order
 * Include a checksum in server response
 
@@ -50,7 +49,6 @@ When an extender node receives a response, it will run the script specified with
 
 Immediate:
 
-* Make it send triple ACK 
 * Deal with network byte order vs host byte order
 * Checksum verification
 * Add timeout so it abandons an incoming message if no data is received for a long time 
