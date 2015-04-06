@@ -17,6 +17,7 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 
+#include "protocol.h"
 #include "phyconnect.h"
 
 // how often to send request (in seconds)
@@ -29,19 +30,6 @@
 #define STATE_CONNECTED (1)
 #define STATE_DONE (2)
 
-// structs below
-
-struct request {
-  uint32_t type;
-};
-
-struct response {
-  uint32_t type;
-  uint32_t lease_ip;
-  uint32_t lease_netmask;
-  uint32_t cert_size;
-};
-
 // global variables below
 
 int src_port = 4243;
@@ -49,6 +37,11 @@ int dest_port = 4242;
 int received = 0; // how much of current message has been received
 char recvbuf[sizeof(struct response) + MAX_CERT_SIZE + 1];
 int state = STATE_DISCONNECTED; // track state
+int verbose = 0;
+char* hook_script_path = NULL;
+char* listen_ifname = NULL; // interface name to listen on
+char* ssl_cert_path = NULL; // where to write ssl cert
+char* ssl_key_path = NULL; // where to write ssl key
 
 // functions declarations below
 
@@ -82,8 +75,22 @@ int send_request(int sock) {
 }
 
 
-int receive_complete(struct response* resp, char* cert) {
+void run_hook_script(char* ip, char* netmask, char* cert_path, char* key_path) {
+  if(!hook_script_path) {
+    return;
+  }
+
+  if(execl(hook_script_path, listen_ifname, ip, netmask, cert_path, key_path, NULL) < 0) {
+    perror("error running hook script");
+  }
+}
+
+int receive_complete(struct response* resp, char* cert, char* key) {
   struct in_addr tmp_addr;
+  FILE* out;
+  size_t written;
+  int wrote_cert = 0;
+  int wrote_key = 0;
   
   printf("Response received:\n");
   printf("  type: %d\n", resp->type);
@@ -102,6 +109,42 @@ int receive_complete(struct response* resp, char* cert) {
   // TODO send ACK
 
   state = STATE_DONE;
+
+  // write ssl cert
+  if(ssl_cert_path && cert) {
+    out = fopen(ssl_cert_path, "w+");
+    if(!out) {
+      perror("failed to write SSL cert");
+    }
+    written = fwrite(cert, 1, resp->cert_size, out);
+    if(written != resp->cert_size) {
+      perror("failed to write SSL cert");
+    } else {
+      wrote_cert = 1;
+    }
+    fclose(out);
+  }
+
+  // write ssl key
+  if(ssl_key_path && key) {
+    out = fopen(ssl_key_path, "w+");
+    if(!out) {
+      perror("failed to write SSL key");
+    }
+    written = fwrite(key, 1, resp->key_size, out);
+    if(written != resp->key_size) {
+      perror("failed to write SSL key");
+    } else {
+      wrote_cert = 1;
+    }
+    fclose(out);
+  }
+
+  if(wrote_cert && wrote_key) {
+    run_hook_script(inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), ssl_cert_path, ssl_key_path);
+  } else {
+    run_hook_script(inet_ntoa(tmp_addr), inet_ntoa(tmp_addr), NULL, NULL);
+  }
 
   return 0;
 }
@@ -137,7 +180,7 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
 
   if(resp->cert_size == 0) {
     received = 0;
-    return receive_complete(resp, NULL);
+    return receive_complete(resp, NULL, NULL);
   }
 
   if(resp->cert_size > MAX_CERT_SIZE) {
@@ -154,7 +197,7 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   received = 0;
   cert = (char*) recvbuf + sizeof(struct response);
   cert[resp->cert_size] = '\0';
-  return receive_complete(resp, cert);
+  return receive_complete(resp, cert, NULL); // TODO also receive key 
 
   return 0;
 }
@@ -211,7 +254,33 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
   return sock;
 }
 
-int main() {
+// call with e.g. usage(argv[0], stdin) or usage(argv[0], stderr)
+void usage(char* command_name, FILE* out) {
+  char default_command_name[] = "notdhcpclient";
+  if(!command_name) {
+    command_name = (char*) &default_command_name;
+  }
+  fprintf(out, "Usage: %s [-v] interface\n", command_name);
+  fprintf(out, "\n");
+  fprintf(out, "  -s hook_script: Hook script to run upon receiving \"lease\"\n");
+  fprintf(out, "  -c ssl_cert: Where to write SSL cert\n");
+  fprintf(out, "  -k ssl_key: Where to write SSL key\n");
+  fprintf(out, "  -v: Enable verbose mode\n");
+  fprintf(out, "  -h: This help text\n");
+  fprintf(out, "\n");
+  fprintf(out, "Example usage:\n");
+  fprintf(out, "\n");
+  fprintf(out, "  %s eth0\n", command_name);
+  fprintf(out, "\n");
+}
+
+void usagefail(char* command_name) {
+  fprintf(stderr, "Error: Missing required command-line arguments.\n\n");
+  usage(command_name, stderr);
+  return;
+}
+
+int main(int argc, char** argv) {
 
   fd_set fdset;
   int sock;
@@ -221,7 +290,42 @@ int main() {
   struct sockaddr_in bind_addr;
   struct timeval timeout;
   time_t last_request = 0;
+  int c;
   
+  if(argc <= 0) {
+    usagefail(NULL);
+    exit(1);
+  }
+
+  while((c = getopt(argc, argv, "s:c:k:vh")) != -1) {
+    switch (c) {
+    case 's':
+      hook_script_path = optarg;
+      break;
+    case 'c':
+      ssl_cert_path = optarg;
+      break;
+    case 'k':
+      ssl_key_path = optarg;
+      break;
+    case 'v': 
+      printf("Verbose mode enabled\n");
+      verbose = 1; 
+      break; 
+    case 'h':
+      usage(argv[0], stdout);
+      exit(0);
+    }
+  }
+
+  // need at least one non-option argument
+  if(argc < optind + 1) {
+    usagefail(argv[0]);
+    exit(1);
+  }
+
+  listen_ifname = argv[optind];
+
   nlsock = netlink_open_socket();
   if(nlsock < 0) {
     fprintf(stderr, "could not open netlink socket\n");
@@ -238,7 +342,7 @@ int main() {
   bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
   bind_addr.sin_port = htons(src_port);
 
-  sock = open_socket("lo", &bind_addr);
+  sock = open_socket(listen_ifname, &bind_addr);
   if(sock < 0) {
     fprintf(stderr, "could not open socket\n");
     exit(1);

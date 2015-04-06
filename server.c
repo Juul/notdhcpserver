@@ -17,7 +17,10 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 
-#define MAX_CERT_SIZE (16384)
+#include "protocol.h"
+#include "phyconnect.h"
+
+#define MAX_CERT_SIZE (65536)
 
 // structs below
 
@@ -28,17 +31,6 @@ struct interface {
   int sock;
   struct sockaddr_in addr;
   struct interface* next;
-};
-
-struct request {
-  uint32_t type;
-};
-
-struct response {
-  uint32_t type;
-  uint32_t lease_ip;
-  uint32_t lease_netmask;
-  uint32_t cert_size;
 };
 
 // global variables below
@@ -135,7 +127,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "  -v: Enable verbose mode\n");
   fprintf(out, "  -h: This help text\n");
   fprintf(out, "\n");
-  fprintf(out, "For each interface where you want nodhcpserver to hand out an IP \"lease\"\n");
+  fprintf(out, "For each interface where you want nothcpserver to hand out an IP \"lease\"\n");
   fprintf(out, "specify an interface+ip pair. E.g:\n");
   fprintf(out, "\n");
   fprintf(out, "  %s eth0.2=100.64.0.2/255.255.255.192 eth0.3=100.64.0.3/255.255.255.192\n", command_name);
@@ -356,6 +348,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  // need at least one non-option argument
   if(argc < optind + 1) {
     usagefail(argv[0]);
     exit(1);
