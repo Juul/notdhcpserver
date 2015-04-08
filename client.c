@@ -16,6 +16,8 @@
 #include <arpa/inet.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#include <netinet/if_ether.h>
+#include <netpacket/packet.h>
 
 #include "crc32.h"
 #include "common.h"
@@ -31,7 +33,7 @@
 
 // global variables below
 
-struct sockaddr_in bind_addr;
+struct sockaddr_ll bind_addr;
 int sock;
 int received = 0; // how much of current message has been received
 char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
@@ -50,8 +52,8 @@ uint32_t calc_crc(struct response* resp, size_t len) {
 
 int broadcast_packet_raw(int sock, void* buffer, size_t len) {
   int attempts = 3;
-
-  while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT) != len) {
+  
+  while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT, &bind_addr) != len) {
     // failed to send entire packet
     if(attempts--) {
       usleep(200000);
@@ -90,7 +92,7 @@ int send_request(int sock) {
 
   req.type = htonl(REQUEST_TYPE_GETLEASE);
   
-  return broadcast_packet(sock, (void*) &req, sizeof(req));
+  return broadcast_packet_raw(sock, (void*) &req, sizeof(req));
 }
 
 
@@ -117,7 +119,7 @@ int send_triple_ack(int sock) {
   req.type = htonl(REQUEST_TYPE_ACK);
 
   while(times--) {
-    if(broadcast_packet(sock, (void*) &req, sizeof(req)) < 0) {
+    if(broadcast_packet_raw(sock, (void*) &req, sizeof(req)) < 0) {
       return -1;
     }
     usleep(100000);
@@ -189,16 +191,16 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   return 0;
 }
 
-int handle_incoming(int sock, struct sockaddr_in* addr) {
+int handle_incoming(int sock) {
   struct response* resp;
   ssize_t ret;
-  socklen_t addrlen = sizeof(addr);
+  socklen_t addrlen = sizeof(bind_addr);
   char* cert;
   char* key;
   int total_size;
   uint32_t crc;
 
-  ret = recvfrom(sock, recvbuf + received, MAX_RESPONSE_SIZE - received, 0, (struct sockaddr*) addr, &addrlen);
+  ret = recvfrom(sock, recvbuf + received, MAX_RESPONSE_SIZE - received, 0, (struct sockaddr*) &bind_addr, &addrlen);
   if(ret < 0) {
     if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
       return 0;
@@ -291,7 +293,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   if(connected && (state == STATE_DISCONNECTED)) {
     printf("%s: Physical connection detected\n", ifname);
 
-    sock = open_socket(listen_ifname, &bind_addr);
+    sock = open_socket(listen_ifname);
     if(sock < 0) {
       fprintf(stderr, "Fatal error: Could not re-open socket\n");
       exit(1);
@@ -312,19 +314,52 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 
 }
 
-int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
+int open_socket(char* ifname) {
+
+  unsigned padding;
+  int sock;
+  int result = -1;
+  const char *msg;
+  int ifindex;
+  const unsigned char broadcast_mac[] = {0xff,0xff,0xff,0xff,0xff,0xff};
+
+  sock = socket(PF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
+	if (sock < 0) {
+    perror("error creating socket");
+    exit(1);
+	}
+
+	memset(&bind_addr, 0, sizeof(bind_addr));
+
+	bind_addr.sll_family = AF_PACKET;
+	bind_addr.sll_protocol = htons(ETH_P_IP);
+	bind_addr.sll_halen = 6;
+	memcpy(bind_addr.sll_addr, broadcast_mac, 6);
+
+  ifindex = ifindex_from_ifname(sock, "eth0");
+  if(ifindex < 0) {
+    printf("error getting ifindex\n");
+    exit(1);
+  }
+
+	bind_addr.sll_ifindex = ifindex;
+
+	if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
+    perror("error calling bind()");
+    exit(1);
+	}
+
+  if(verbose) {
+    printf("Socket opened\n");
+  }
+
+  return sock;
+}
+
+int open_socket_old(char* ifname, struct sockaddr_in* bind_addr) {
   int sock;
   int sockmode;
   int broadcast_perm;
-
-  /* 
-     //raw version
-  if((sock = socket(PF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
-    perror("creating socket failed");
-    return -1;
-  }
-  */
-
 
   if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
     perror("creating socket failed");
@@ -448,11 +483,6 @@ int main(int argc, char** argv) {
     perror("Fatal error: Failed to send netlink request");
     exit(1);
   }
-
-  memset(&bind_addr, 0, sizeof(bind_addr));
-  bind_addr.sin_family = AF_INET;
-  bind_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
-  bind_addr.sin_port = htons(CLIENT_PORT);
   
   for(;;) {
     FD_ZERO(&fdset);
@@ -481,7 +511,7 @@ int main(int argc, char** argv) {
     }
 
     if(FD_ISSET(sock, &fdset)) {
-      while(handle_incoming(sock, &bind_addr)) {
+      while(handle_incoming(sock)) {
         // nothing here
       }
     }

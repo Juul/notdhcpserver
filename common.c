@@ -1,4 +1,5 @@
 
+#include <unistd.h> 
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -13,6 +14,24 @@
 #include <linux/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+
+int ifindex_from_ifname(int sock, char* ifname) {
+
+  struct ifreq ifr;
+  size_t len = strlen(ifname);
+
+  if(len < sizeof(ifr.ifr_name)) {
+    memcpy(ifr.ifr_name, ifname, len);
+    ifr.ifr_name[len] = '\0';
+  } else {
+    return -1;
+  }
+
+  if(ioctl(sock, SIOCGIFINDEX, &ifr) < 0) {
+    return -1;
+  }
+  return ifr.ifr_ifindex;
+}
 
 unsigned short ComputeChecksum(unsigned char *data, int len)
 {
@@ -35,60 +54,63 @@ unsigned short ComputeChecksum(unsigned char *data, int len)
     return ~sum;
 }
 
-int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uint16_t dest_port) {
-  struct sockaddr_in dest_addr;
-  struct ip* ip_header;
+int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uint16_t dest_port, struct sockaddr_ll* dest_addr) {
+  //  struct sockaddr_in dest_addr;
+  struct iphdr* ip_header;
   struct udphdr* udp_header;
   void* payload;
-  size_t to_send;
-  size_t sent = 0;
-  size_t ret;
+  size_t packet_size;
+  ssize_t sent = 0;
+  ssize_t ret;
 
-  void* data = (void*) malloc(sizeof(struct ip) + sizeof(struct udphdr) + len);
+  packet_size = sizeof(struct iphdr) + sizeof(struct udphdr) + len;
+
+  void* data = (void*) malloc(packet_size);
   if(!data) {
-    return - 1;
+    return -1;
   }
 
-  ip_header = data;
-  udp_header = data + sizeof(struct ip);
+  memset(data, 0, packet_size);
 
+  ip_header = data;
+  udp_header = data + sizeof(struct iphdr);
   payload = udp_header + sizeof(struct udphdr);
   memcpy(payload, buffer, len);
-  to_send = sizeof(struct ip) + sizeof(struct udphdr) + len;
 
+  /*
   dest_addr.sin_family = AF_INET;
   dest_addr.sin_addr.s_addr = INADDR_BROADCAST;
   dest_addr.sin_port = htons(dest_port);
-  
-  ip_header->ip_v = 4;
-  ip_header->ip_hl = 5;
-  ip_header->ip_tos = IPTOS_LOWDELAY;
-  ip_header->ip_id = 0;
-  ip_header->ip_ttl = 16;
-  ip_header->ip_p = IPPROTO_UDP;
-  ip_header->ip_off = 0;
-  inet_pton(AF_INET, "0.0.0.0", &(ip_header->ip_src));
-  inet_pton(AF_INET, "255.255.255.255", &(ip_header->ip_dst));
-  //  ip_header->ip_sum = 0;
-  ip_header->ip_len = htons(sizeof(struct ip) + sizeof(struct udphdr) + len);
-  ip_header->ip_sum = ComputeChecksum((unsigned char *)ip_header, ip_header->ip_hl*4);
+  */
+
+  ip_header->version = 4;
+  ip_header->protocol = IPPROTO_UDP;
+  inet_pton(AF_INET, "0.0.0.0", &(ip_header->saddr));
+  ip_header->daddr = INADDR_BROADCAST;
+  ip_header->ihl = sizeof(struct iphdr) >> 2;
+  ip_header->ttl = IPDEFTTL;
+  ip_header->tot_len = htons(packet_size);
+  ip_header->check = ComputeChecksum((unsigned char *) ip_header, sizeof(struct iphdr));
 
   udp_header->source = htons(src_port);
   udp_header->dest = htons(dest_port);
   udp_header->check = htons(0);
   udp_header->len = htons(sizeof(struct udphdr) + len);
   
-  while(sent < to_send) {
-    ret = sendto(sock, data + sent, to_send - sent, 0, (struct sockaddr*) &dest_addr, sizeof(struct sockaddr));
-    if(ret <= 0) {
+  while(sent < packet_size) {
+    ret = sendto(sock, data + sent, packet_size - sent, 0, (struct sockaddr*) dest_addr, sizeof(struct sockaddr_ll));
+
+    if(ret < 0) {
+      perror("failed to send");
       free(data);
       return ret;
     }
     sent += ret;
   }
 
+
   free(data);
-  return sent - sizeof(struct ip) - sizeof(struct udphdr);
+  return sent - sizeof(struct iphdr) - sizeof(struct udphdr);
 }
 
 
