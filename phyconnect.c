@@ -10,6 +10,9 @@
 
 #include "phyconnect.h"
 
+// No idea if this is a good size
+#define MAX_MSG_SIZE (8192)
+
 /*
   Simple couple of functions to listen to a netlink socket
   and run a callback whenever a network interface is physically
@@ -57,20 +60,19 @@ int netlink_open_socket() {
 int netlink_handle_incoming(int nlsock, void (*callback)(char*, int)) {
   struct nlmsghdr* nlheader;
   struct nlmsghdr* cur;
-  ssize_t len;
-  ssize_t received = 0;
   struct ifinfomsg* ifmsg;
   struct rtattr* rta;
   int rta_len;
   int* operstate;
   char* ifname = NULL;
+  int len;
+  ssize_t received = 0;
   int got_operstate = 0;
   
-  // TODO no idea if 8192 is a good value
-  nlheader = (struct nlmsghdr*) malloc(8192);
-  
+  nlheader = (struct nlmsghdr*) malloc(MAX_MSG_SIZE);
+
   while(received < sizeof(struct nlmsghdr)) {
-    len = recv(nlsock, nlheader, 8192, 0);
+    len = recv(nlsock, nlheader, MAX_MSG_SIZE, 0);
     if(len == 0) {
       break;
     }
@@ -80,7 +82,7 @@ int netlink_handle_incoming(int nlsock, void (*callback)(char*, int)) {
     }
     received += len;
   }
-  
+
   // iterate over netlink messages
   for(cur = nlheader; (NLMSG_OK(cur, received)) && (cur->nlmsg_type != NLMSG_DONE); cur = NLMSG_NEXT(cur, received)) {
     got_operstate = 0;

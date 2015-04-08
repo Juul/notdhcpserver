@@ -27,7 +27,6 @@ When the home node receives an ack it will run the script specified with -s on t
 
 Immediate:
 
-* Server exits for no good reason (after receiving ack?)
 * CRC isn't working
 
 Future:
@@ -51,9 +50,8 @@ When an extender node receives a response, it will run the script specified with
 Immediate:
 
 * CRC isn't working
-* Ensure client stops listening after it has gotten a response and sent an ack
+* Make it keep receiving until there is no more to receive
 * Add timeout so it abandons an incoming message if no data is received for a few seconds
-* Make -v actually do something
 
 Future:
 

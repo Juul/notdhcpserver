@@ -31,6 +31,8 @@
 
 // global variables below
 
+struct sockaddr_in bind_addr;
+int sock;
 int received = 0; // how much of current message has been received
 char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
 int state = STATE_DISCONNECTED; // track state
@@ -47,20 +49,14 @@ uint32_t calc_crc(struct response* resp, size_t len) {
 }
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
-  struct sockaddr_in broadcast_addr;
   int attempts = 3;
 
-  memset(&broadcast_addr, 0, sizeof(broadcast_addr));
-  broadcast_addr.sin_family = AF_INET;
-  broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = SERVER_PORT;
-
-  while(sendto(sock, buffer, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr)) != len) {
+  while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT) != len) {
     // failed to send entire packet
-    if(--attempts) {
-      fprintf(stderr, "broadcast failed after several attempts\n");
+    if(attempts--) {
       usleep(200000);
     } else {
+      fprintf(stderr, "broadcast failed after several attempts\n");
       return -1;
     }
   }
@@ -118,24 +114,14 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   ip_addr.s_addr = (unsigned long) resp->lease_ip;
   subnet_addr.s_addr = (unsigned long) resp->lease_netmask;
 
-  printf("Response received:\n");
-  printf("  type: %d\n", resp->type);
-  printf("  lease_ip: %s\n", inet_ntoa(ip_addr));
-  printf("  lease_subnet: %s\n", inet_ntoa(subnet_addr));
-  printf("  cert size: %d\n", resp->cert_size);
+  if(verbose) {
+    printf("Response received:\n");
+    printf("  type: %d\n", resp->type);
+    printf("  lease_ip: %s\n", inet_ntoa(ip_addr));
+    printf("  lease_subnet: %s\n", inet_ntoa(subnet_addr));
+    printf("  cert size: %d\n", resp->cert_size);
+  }
   
-  if(cert) {
-    printf("  cert:\n%s\n", cert);
-  } else {
-    printf("  cert: No certificate sent\n");
-  }
-
-  if(key) {
-    printf("  key:\n%s\n", key);
-  } else {
-    printf("  key: No key sent\n");
-  }
-
   if(send_triple_ack(sock) < 0) {
     return -1;
   }
@@ -173,9 +159,9 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   }
 
   if(wrote_cert && wrote_key) {
-    run_hook_script(hook_script_path, "up", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, ssl_cert_path, ssl_key_path);
+    run_hook_script(hook_script_path, "up", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, ssl_cert_path, ssl_key_path, NULL);
   } else {
-    run_hook_script(hook_script_path, "down", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, NULL, NULL);
+    run_hook_script(hook_script_path, "down", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, NULL);
   }
 
   return 0;
@@ -193,17 +179,16 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   ret = recvfrom(sock, recvbuf + received, MAX_RESPONSE_SIZE - received, 0, (struct sockaddr*) addr, &addrlen);
   if(ret < 0) {
     if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
-      printf("would block\n");
       return 0;
     }
     perror("error receiving packet 1");
-    return -1;
+    return 1;
   }  
   received += ret;
 
   // We didn't receive enough data to process, so wait for more
   if(received < sizeof(struct response)) {
-    return 0;
+    return 1;
   }
 
   resp = (struct response*) recvbuf;
@@ -223,7 +208,7 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
       printf("CRC wrong (expected %lu but was %lu). Ignoring message.\n", (unsigned long int) crc, (unsigned long int) resp->crc);
     }
     received = 0;
-    return -1;
+    return 1;
   }
   */
   resp->type = ntohl(resp->type);
@@ -233,30 +218,33 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   resp->key_size = ntohl(resp->key_size);
 
   if(resp->type != RESPONSE_TYPE) {
-    fprintf(stderr, "unknown message type\n");
-    return -1;
+    if(verbose) {
+      printf("Unknown data received\n");
+    }
+    return 1;
   }
 
   if((resp->cert_size == 0) && (resp->key_size == 0)) {
     received = 0;
-    return receive_complete(sock, resp, NULL, NULL);
+    receive_complete(sock, resp, NULL, NULL);
+    return 1;
   }
 
   if(resp->cert_size > MAX_CERT_SIZE) {
     fprintf(stderr, "server trying to send SSL certificate that's too big\n");
     received = 0;
-    return -1;
+    return 1;
   }
 
   if(resp->key_size > MAX_KEY_SIZE) {
     fprintf(stderr, "server trying to send SSL key that's too big\n");
     received = 0;
-    return -1;
+    return 1;
   }
   
   // There is still more to receive
   if(received < (sizeof(struct response) + resp->cert_size + resp->key_size)) {
-    return 0;
+    return 1;
   }
 
   received = 0; // reset received counter, ready for next message
@@ -267,7 +255,8 @@ int handle_incoming(int sock, struct sockaddr_in* addr) {
   key = (char*) recvbuf + sizeof(struct response) + resp->cert_size;
   key[resp->key_size - 1] = '\0';
 
-  return receive_complete(sock, resp, cert, key); 
+  receive_complete(sock, resp, cert, key);
+  return 1;
 }
 
 void physical_ethernet_state_change(char* ifname, int connected) {
@@ -278,13 +267,24 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   }
 
   if(connected && (state == STATE_DISCONNECTED)) {
-    printf("  %s state: up\n", ifname);
+    printf("%s: Physical connection detected\n", ifname);
+
+    sock = open_socket(listen_ifname, &bind_addr);
+    if(sock < 0) {
+      fprintf(stderr, "Fatal error: Could not re-open socket\n");
+      exit(1);
+    }
     state = STATE_CONNECTED;
-  } else {
-    printf("  %s state: down\n", ifname);
+
+  } else if(!connected) {
     if(state != STATE_DISCONNECTED) {
+
+      printf("%s: Physical disconnect detected\n", ifname);
+
       state = STATE_DISCONNECTED;
-      run_hook_script(hook_script_path, "down", NULL, NULL, NULL, NULL, NULL);
+      close_socket(sock);
+
+      run_hook_script(hook_script_path, "down", NULL);
     }
   }
 
@@ -295,7 +295,7 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
   int sockmode;
   int broadcast_perm;
 
-  if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+  if((sock = socket(PF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
     perror("creating socket failed");
     return -1;
   }
@@ -321,14 +321,19 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
     perror("setting broadcast permission on socket failed");
     return -1;
   }
-
+  /*
   if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_in)) < 0) {
     perror("failed to bind udp socket");
     return -1;
   }
-
+  */
   return sock;
 }
+
+int close_socket(int sock) {
+  return close(sock);
+}
+
 
 // call with e.g. usage(argv[0], stdin) or usage(argv[0], stderr)
 void usage(char* command_name, FILE* out) {
@@ -359,14 +364,14 @@ void usagefail(char* command_name) {
 int main(int argc, char** argv) {
 
   fd_set fdset;
-  int sock;
   int nlsock;
   int num_ready;
   int max_fd;
-  struct sockaddr_in bind_addr;
   struct timeval timeout;
   time_t last_request = 0;
   int c;
+
+  state = STATE_DISCONNECTED;
   
   if(argc <= 0) {
     usagefail(NULL);
@@ -404,29 +409,27 @@ int main(int argc, char** argv) {
 
   nlsock = netlink_open_socket();
   if(nlsock < 0) {
-    fprintf(stderr, "could not open netlink socket\n");
+    fprintf(stderr, "Fatal error: Could not open netlink socket\n");
     exit(1);
   }
 
   if(netlink_send_request(nlsock) < 0) {
-    perror("failed to send netlink request");
+    perror("Fatal error: Failed to send netlink request");
     exit(1);
   }
 
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
-  bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  bind_addr.sin_port = CLIENT_PORT;
-
-  sock = open_socket(listen_ifname, &bind_addr);
-  if(sock < 0) {
-    fprintf(stderr, "could not open socket\n");
-    exit(1);
-  }
-
+  bind_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
+  bind_addr.sin_port = htons(CLIENT_PORT);
+  
   for(;;) {
     FD_ZERO(&fdset);
-    FD_SET(sock, &fdset);
+
+    if(state == STATE_CONNECTED) {
+      FD_SET(sock, &fdset);
+    }
+
     if(nlsock) {
       FD_SET(nlsock, &fdset);
     }
@@ -447,7 +450,9 @@ int main(int argc, char** argv) {
     }
 
     if(FD_ISSET(sock, &fdset)) {
-      handle_incoming(sock, &bind_addr);
+      while(handle_incoming(sock, &bind_addr)) {
+        // nothing here
+      }
     }
 
     if(FD_ISSET(nlsock, &fdset)) {

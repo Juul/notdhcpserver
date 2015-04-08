@@ -35,8 +35,9 @@ struct interface {
   struct interface* next;
 };
 
-#define STATE_LISTENING (0)
-#define STATE_GOT_ACK (1)
+#define STATE_STOPPED (0)
+#define STATE_LISTENING (1)
+#define STATE_GOT_ACK (2)
 
 // global variables below
 
@@ -78,45 +79,15 @@ void generate_password(char* buffer, int len) {
   return;
 }
 
-/*
-void run_hook_script(struct interface* iface, const char* up_or_down) {
-  if(!hook_script_path) {
-    return;
-  }
-
-  if(execl(SHELL_COMMAND, hook_script_path, iface->ifname, up_or_down, iface->ip, iface->netmask, iface->password, ssl_cert_path, ssl_key_path, NULL) < 0) {
-    perror("error running hook script");
-  }
-}
-*/
-
 int broadcast_packet(int sock, void* buffer, size_t len) {
-  struct sockaddr_in broadcast_addr;
-  int sent = 0;
-  int ret;
-  int max;
-
-  memset(&broadcast_addr, 0, sizeof(broadcast_addr));
-  broadcast_addr.sin_family = AF_INET;
-  broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = CLIENT_PORT;
-
-  while(sent < len) {
-    ret = sendto(sock, buffer + sent, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
-    if(ret < 0) {
-      return ret;
-    }
-    sent += ret;
-  }
-
-  return 0;
+  return raw_udp_broadcast(sock, buffer, len, SERVER_PORT, CLIENT_PORT);
 }
 
 void add_crc(struct response* resp, size_t len) {
   resp->crc = htonl(crc32((char*) resp + sizeof(resp->crc), len - sizeof(resp->crc)));
 }
 
-int send_response(int sock, char* lease_ip, char* lease_netmask, char* password) {
+int send_response(struct interface* iface) {
   struct response resp;
   void* sendbuf;
   int response_size;
@@ -125,16 +96,19 @@ int send_response(int sock, char* lease_ip, char* lease_netmask, char* password)
   int ret;
 
   resp.type = htonl(RESPONSE_TYPE);
-  resp.lease_ip = htonl(inet_addr(lease_ip));
-  resp.lease_netmask = htonl(inet_addr(lease_netmask));
-  strncpy((char*) &(resp.password), password, PASSWORD_LENGTH + 1);
+  resp.lease_ip = htonl(inet_addr(iface->ip));
+  resp.lease_netmask = htonl(inet_addr(iface->netmask));
+  strncpy((char*) &(resp.password), iface->password, PASSWORD_LENGTH + 1);
 
   if(!ssl_cert || !ssl_key) {
     resp.cert_size = 0;
     resp.key_size = 0;
     add_crc(&resp, sizeof(resp));
-    printf("CRC: %uld\n", resp.crc);
-    return broadcast_packet(sock, (void*) &resp, sizeof(resp));
+    printf("CRC: %ul\n", resp.crc);
+    if(verbose) {
+      printf("%s: sending response (without ssl certificate)\n", iface->ifname);
+    }
+    return broadcast_packet(iface->sock, (void*) &resp, sizeof(resp));
   }
 
   cert_size = strlen(ssl_cert) + 1;
@@ -160,11 +134,14 @@ int send_response(int sock, char* lease_ip, char* lease_netmask, char* password)
 
   response_size = sizeof(resp) + cert_size + key_size;
 
-  printf("total size: %d\n", response_size);
-
   add_crc(&resp, response_size);
-  //  printf("CRC: %lu\n", resp.crc);
-  ret = broadcast_packet(sock, sendbuf, response_size);
+
+  printf("CRC: %ul\n", resp.crc);
+
+  if(verbose) {
+    printf("%s: sending response (with ssl certificate)\n", iface->ifname);
+  }
+  ret = broadcast_packet(iface->sock, sendbuf, response_size);
 
   free(sendbuf);
 
@@ -179,33 +156,55 @@ int handle_incoming(struct interface* iface) {
   
   ret = recvfrom(iface->sock, &req, sizeof(req), 0, (struct sockaddr*) &(iface->addr), &addrlen);
   if(ret < 0) {
-    perror("error receiving packet");
-    return -1;
+    if((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
+      return 0;
+    }
   }
 
   // didn't receive a full request, so just wait for next one to arrive
   if(ret < sizeof(req)) {
-    return -1;
+    return 1;
   }
-  
+
+  if(ret == 0) {
+    return 1;
+  }
+
   req.type = ntohl(req.type);
 
   if(req.type == REQUEST_TYPE_GETLEASE) {
-
+    if(verbose) {
+      printf("%s: Received lease request\n", iface->ifname);
+    }
     generate_password(iface->password, PASSWORD_LENGTH + 1);
 
-    return send_response(iface->sock, iface->ip, iface->netmask, iface->password);
+    send_response(iface);
+    return 1;
   }
 
   if(req.type == REQUEST_TYPE_ACK) {
+    if(iface->state == STATE_GOT_ACK) {
+      if(verbose) {
+        printf("%s: Received redundant ACK\n", iface->ifname);
+      }
+      return 1;
+    }
+    if(verbose) {
+      printf("%s: Received ACK\n", iface->ifname);
+    }
     iface->state = STATE_GOT_ACK;
-    run_hook_script(hook_script_path, iface, "up");
-    return 0;
+    if(verbose) {
+      printf("%s: Running up hook script\n", iface->ifname);
+    }
+    run_hook_script(hook_script_path, iface->ifname, "up", NULL);
+    return 1;
   }
 
-  fprintf(stderr, "Got unknown request type\n");
-
-  return -1;
+  if(verbose) {
+    printf("%s: Got unknown request type\n", iface->ifname);
+  }
+  
+  return 1;
 }
 
 // call with e.g. usage(argv[0], stdin) or usage(argv[0], stderr)
@@ -256,6 +255,11 @@ struct interface* add_interface(struct interface* iface) {
   return cur;
 }
 
+int stop_monitor_interface(struct interface* iface) {
+  iface->state = STATE_STOPPED;
+  return close(iface->sock);
+}
+
 int monitor_interface(struct interface* iface) {
 
   struct sockaddr_in bind_addr;
@@ -291,11 +295,11 @@ int monitor_interface(struct interface* iface) {
     perror("setting broadcast permission on socket failed");
     return -1;
   }
-
+  
   memset(&bind_addr, 0, sizeof(bind_addr));
   bind_addr.sin_family = AF_INET;
-  bind_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  bind_addr.sin_port = SERVER_PORT;
+  bind_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
+  bind_addr.sin_port = htons(SERVER_PORT);
 
   if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
     perror("failed to bind udp socket");
@@ -306,11 +310,11 @@ int monitor_interface(struct interface* iface) {
   iface->addr = bind_addr;
   iface->state = STATE_LISTENING;
 
-  add_interface(iface);
-
-  printf("Listening on interface %s:\n", iface->ifname);
-  printf("  client IP: %s\n", iface->ip);
-  printf("  client netmask %s\n\n", iface->netmask);
+  if(verbose) {
+    printf("Listening on interface %s:\n", iface->ifname);
+    printf("  client IP: %s\n", iface->ip);
+    printf("  client netmask %s\n\n", iface->netmask);
+  }
 
   return 0;
 }
@@ -364,6 +368,8 @@ int parse_arg(char* arg) {
     return -1;
   }
   
+  add_interface(iface);
+
   return 0;
 }
 
@@ -416,26 +422,37 @@ char* load_file(char* path, int size) {
 void physical_ethernet_state_change(char* ifname, int connected) {
   struct interface* iface;
 
-  // we don't care about connect events
-  // since we're always listening even during physical disconnect
-  if(connected) {
-    return;
-  }
-  
   // check if we are monitoring this interface
   iface = interfaces;
   do {
     if(strcmp(iface->ifname, ifname) == 0) {
-      // an interface was physically disconnected
-      // so reset the state to "listening" 
-      // so we're ready for new requests
-      if(iface->state != STATE_LISTENING) {
-        iface->state = STATE_LISTENING;
-        run_hook_script(hook_script_path, iface, "down");
+      if(connected) { // interface up event
+        // if interface was stopped then resume listening
+        if(iface->state == STATE_STOPPED) {
+          if(verbose) {
+            printf("%s: Physical connection detected\n", ifname);
+          }
+          if(monitor_interface(iface) < 0) {
+            return;
+          }
+          return;
+        }
+      } else { // interface down event
+        // if interface was listening then stop listening and run down hook
+        if(iface->state != STATE_STOPPED) {
+          if(stop_monitor_interface(iface) < 0) {
+            return;
+          }
+          if(verbose) {
+            printf("%s: Physical disconnect detected\n", ifname);
+          }
+          run_hook_script(hook_script_path, iface->ifname, "down", NULL);
+        }
         return;
       }
     }
   } while(iface = iface->next);
+  
 }
 
 int main(int argc, char** argv) {
@@ -508,8 +525,6 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  printf("Ready.\n");
-
   for(;;) {
 
     // initialize fdset
@@ -541,25 +556,16 @@ int main(int argc, char** argv) {
       perror("error during select");
     }
 
-    printf("got stuff\n");
-
     if(FD_ISSET(nlsock, &fdset)) {
       netlink_handle_incoming(nlsock, physical_ethernet_state_change);
     }
-
     iface = interfaces;
     do {
       if(FD_ISSET(iface->sock, &fdset)) {
-        if(verbose) {
-          printf("Packet received on interface %s\n", iface->ifname);
+        while(handle_incoming(iface)) {
+          // nothing here
         }
-
-        if(handle_incoming(iface) < 0) {
-          fprintf(stderr, "Error handling incoming packet\n");
-        } else {
-          printf("Response sent!\n");
-        }
-
+        
       }
     } while(iface = iface->next);
   }  
