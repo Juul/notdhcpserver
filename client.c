@@ -48,7 +48,7 @@ uint32_t calc_crc(struct response* resp, size_t len) {
   return crc32((char*) (resp) + sizeof(resp->crc), len - sizeof(resp->crc));
 }
 
-int broadcast_packet(int sock, void* buffer, size_t len) {
+int broadcast_packet_raw(int sock, void* buffer, size_t len) {
   int attempts = 3;
 
   while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT) != len) {
@@ -62,6 +62,28 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   }
   return 0;
 }
+
+int broadcast_packet(int sock, void* buffer, size_t len) {
+  struct sockaddr_in broadcast_addr;
+  int attempts = 3;
+
+  memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+  broadcast_addr.sin_family = AF_INET;
+  broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+  broadcast_addr.sin_port = SERVER_PORT;
+
+  while(sendto(sock, buffer, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr)) != len) {
+    // failed to send entire packet
+    if(--attempts) {
+      fprintf(stderr, "broadcast failed after several attempts\n");
+      usleep(200000);
+    } else {
+      return -1;
+    }
+  }
+  return 0;
+}
+
 
 int send_request(int sock) {
   struct request req;
@@ -295,12 +317,21 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
   int sockmode;
   int broadcast_perm;
 
+  /* 
+     //raw version
   if((sock = socket(PF_INET, SOCK_RAW, IPPROTO_RAW)) < 0) {
     perror("creating socket failed");
     return -1;
   }
+  */
 
-  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)) < 0) {
+
+  if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+    perror("creating socket failed");
+    return -1;
+  }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)+1) < 0) {
     perror("binding to device failed");
     return -1;
   }
@@ -321,12 +352,12 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
     perror("setting broadcast permission on socket failed");
     return -1;
   }
-  /*
+  
   if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_in)) < 0) {
     perror("failed to bind udp socket");
     return -1;
   }
-  */
+  
   return sock;
 }
 
