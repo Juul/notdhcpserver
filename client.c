@@ -16,8 +16,6 @@
 #include <arpa/inet.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
-#include <netinet/if_ether.h>
-#include <netpacket/packet.h>
 
 #include "crc32.h"
 #include "common.h"
@@ -33,8 +31,10 @@
 
 // global variables below
 
-struct sockaddr_ll bind_addr;
-int sock;
+struct sockaddr_in bind_addr;
+struct sockaddr_ll bind_addr_raw;
+int sock; // for receiving and sending ack
+int sock_raw; // for sending initial request
 int received = 0; // how much of current message has been received
 char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
 int state = STATE_DISCONNECTED; // track state
@@ -50,10 +50,10 @@ uint32_t calc_crc(struct response* resp, size_t len) {
   return crc32((char*) (resp) + sizeof(resp->crc), len - sizeof(resp->crc));
 }
 
-int broadcast_packet_raw(int sock, void* buffer, size_t len) {
+int broadcast_packet_raw(int sock, void* buffer, size_t len, struct sockaddr_ll* bind_addr) {
   int attempts = 3;
   
-  while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT, &bind_addr) != len) {
+  while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT, bind_addr) != len) {
     // failed to send entire packet
     if(attempts--) {
       usleep(200000);
@@ -87,12 +87,12 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
 }
 
 
-int send_request(int sock) {
+int send_request(int sock, struct sockaddr_ll* bind_addr) {
   struct request req;
 
   req.type = htonl(REQUEST_TYPE_GETLEASE);
   
-  return broadcast_packet_raw(sock, (void*) &req, sizeof(req));
+  return broadcast_packet_raw(sock_raw, (void*) &req, sizeof(req), bind_addr);
 }
 
 
@@ -119,7 +119,7 @@ int send_triple_ack(int sock) {
   req.type = htonl(REQUEST_TYPE_ACK);
 
   while(times--) {
-    if(broadcast_packet_raw(sock, (void*) &req, sizeof(req)) < 0) {
+    if(broadcast_packet(sock, (void*) &req, sizeof(req)) < 0) {
       return -1;
     }
     usleep(100000);
@@ -198,7 +198,6 @@ int handle_incoming(int sock) {
   char* cert;
   char* key;
   int total_size;
-  uint32_t crc;
 
   ret = recvfrom(sock, recvbuf + received, MAX_RESPONSE_SIZE - received, 0, (struct sockaddr*) &bind_addr, &addrlen);
   if(ret < 0) {
@@ -219,22 +218,6 @@ int handle_incoming(int sock) {
 
   total_size = sizeof(struct response) + ntohl(resp->cert_size) + ntohl(resp->key_size);
 
-
-  crc = calc_crc(resp, total_size);
-  //  printf("CRC: %lu\n", crc);
-
-  // convert to host byte order
-  /*
-  resp->crc = ntohl(resp->crc);
-
-  if(crc != resp->crc) {
-    if(verbose) {
-      printf("CRC wrong (expected %lu but was %lu). Ignoring message.\n", (unsigned long int) crc, (unsigned long int) resp->crc);
-    }
-    received = 0;
-    return 1;
-  }
-  */
   resp->type = ntohl(resp->type);
   resp->lease_ip = ntohl(resp->lease_ip);
   resp->lease_netmask = ntohl(resp->lease_netmask);
@@ -293,11 +276,18 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   if(connected && (state == STATE_DISCONNECTED)) {
     printf("%s: Physical connection detected\n", ifname);
 
-    sock = open_socket(listen_ifname);
+    sock_raw = open_raw_socket(ifname, &bind_addr_raw);
+    if(sock_raw < 0) {
+      fprintf(stderr, "Fatal error: Could not re-open socket\n");
+      exit(1);
+    }
+
+    sock = open_socket(ifname, &bind_addr);
     if(sock < 0) {
       fprintf(stderr, "Fatal error: Could not re-open socket\n");
       exit(1);
     }
+
     state = STATE_CONNECTED;
 
   } else if(!connected) {
@@ -314,7 +304,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 
 }
 
-int open_socket(char* ifname) {
+int open_raw_socket(char* ifname, struct sockaddr_ll* bind_addr) {
 
   unsigned padding;
   int sock;
@@ -329,22 +319,22 @@ int open_socket(char* ifname) {
     exit(1);
 	}
 
-	memset(&bind_addr, 0, sizeof(bind_addr));
+  memset(bind_addr, 0, sizeof(struct sockaddr_ll));
 
-	bind_addr.sll_family = AF_PACKET;
-	bind_addr.sll_protocol = htons(ETH_P_IP);
-	bind_addr.sll_halen = 6;
-	memcpy(bind_addr.sll_addr, broadcast_mac, 6);
+	bind_addr->sll_family = AF_PACKET;
+	bind_addr->sll_protocol = htons(ETH_P_IP);
+	bind_addr->sll_halen = 6;
+	memcpy(bind_addr->sll_addr, broadcast_mac, 6);
 
-  ifindex = ifindex_from_ifname(sock, "eth0");
+  ifindex = ifindex_from_ifname(sock, "eth0\0");
   if(ifindex < 0) {
     printf("error getting ifindex\n");
     exit(1);
   }
 
-	bind_addr.sll_ifindex = ifindex;
+	bind_addr->sll_ifindex = ifindex;
 
-	if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
+	if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_ll)) < 0) {
     perror("error calling bind()");
     exit(1);
 	}
@@ -356,7 +346,7 @@ int open_socket(char* ifname) {
   return sock;
 }
 
-int open_socket_old(char* ifname, struct sockaddr_in* bind_addr) {
+int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
   int sock;
   int sockmode;
   int broadcast_perm;
@@ -511,9 +501,11 @@ int main(int argc, char** argv) {
     }
 
     if(FD_ISSET(sock, &fdset)) {
+      /*
       while(handle_incoming(sock)) {
         // nothing here
       }
+      */
     }
 
     if(FD_ISSET(nlsock, &fdset)) {
@@ -522,7 +514,7 @@ int main(int argc, char** argv) {
 
     if((state == STATE_CONNECTED) && (time(NULL) - last_request >= SEND_REQUEST_EVERY)) {
       printf("Sending request\n");
-      send_request(sock);
+      send_request(sock_raw, &bind_addr_raw);
       last_request = time(NULL);
     }
   }

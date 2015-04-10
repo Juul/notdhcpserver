@@ -1,3 +1,5 @@
+#include <linux/if_packet.h>
+#include <linux/if_ether.h>
 
 int ifindex_from_ifname(int sock, char* ifname);
 

@@ -1,4 +1,3 @@
-
 #include <unistd.h> 
 #include <stdlib.h>
 #include <stdio.h>
@@ -9,11 +8,10 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <arpa/inet.h>
-
-#include <linux/if_packet.h>
-#include <linux/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+
+#include "common.h"
 
 int ifindex_from_ifname(int sock, char* ifname) {
 
@@ -33,24 +31,24 @@ int ifindex_from_ifname(int sock, char* ifname) {
   return ifr.ifr_ifindex;
 }
 
-unsigned short ComputeChecksum(unsigned char *data, int len)
-{
-    long sum = 0;  /* assume 32 bit long, 16 bit short */
+unsigned short calc_checksum(unsigned char *data, int len) {
+    long sum = 0;
     unsigned short *temp = (unsigned short *)data;
 
     while(len > 1){
         sum += *temp++;
-        if(sum & 0x80000000)   /* if high order bit set, fold */
+        if(sum & 0x80000000)
             sum = (sum & 0xFFFF) + (sum >> 16);
         len -= 2;
     }
 
-    if(len)       /* take care of left over byte */
-        sum += (unsigned short) *((unsigned char *)temp);
+    if(len) {
+      sum += (unsigned short) *((unsigned char *)temp);
+    }
 
-    while(sum>>16)
-        sum = (sum & 0xFFFF) + (sum >> 16);
-
+    while(sum>>16) {
+      sum = (sum & 0xFFFF) + (sum >> 16);
+    }
     return ~sum;
 }
 
@@ -70,33 +68,28 @@ int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uin
     return -1;
   }
 
-  memset(data, 0, packet_size);
+  bzero(data, packet_size);
 
   ip_header = data;
   udp_header = data + sizeof(struct iphdr);
   payload = udp_header + sizeof(struct udphdr);
   memcpy(payload, buffer, len);
 
-  /*
-  dest_addr.sin_family = AF_INET;
-  dest_addr.sin_addr.s_addr = INADDR_BROADCAST;
-  dest_addr.sin_port = htons(dest_port);
-  */
-
   ip_header->version = 4;
   ip_header->protocol = IPPROTO_UDP;
-  inet_pton(AF_INET, "0.0.0.0", &(ip_header->saddr));
+  ip_header->daddr = INADDR_ANY;
   ip_header->daddr = INADDR_BROADCAST;
   ip_header->ihl = sizeof(struct iphdr) >> 2;
   ip_header->ttl = IPDEFTTL;
   ip_header->tot_len = htons(packet_size);
-  ip_header->check = ComputeChecksum((unsigned char *) ip_header, sizeof(struct iphdr));
+  ip_header->check = calc_checksum((unsigned char *) ip_header, sizeof(struct iphdr));
 
+  // TODO add udp checksum
   udp_header->source = htons(src_port);
   udp_header->dest = htons(dest_port);
   udp_header->check = htons(0);
   udp_header->len = htons(sizeof(struct udphdr) + len);
-  
+
   while(sent < packet_size) {
     ret = sendto(sock, data + sent, packet_size - sent, 0, (struct sockaddr*) dest_addr, sizeof(struct sockaddr_ll));
 
@@ -108,8 +101,8 @@ int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uin
     sent += ret;
   }
 
-
   free(data);
+
   return sent - sizeof(struct iphdr) - sizeof(struct udphdr);
 }
 

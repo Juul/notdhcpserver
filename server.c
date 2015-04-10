@@ -80,7 +80,25 @@ void generate_password(char* buffer, int len) {
 }
 
 int broadcast_packet(int sock, void* buffer, size_t len) {
-  return raw_udp_broadcast(sock, buffer, len, SERVER_PORT, CLIENT_PORT);
+  struct sockaddr_in broadcast_addr;
+  int sent = 0;
+  int ret;
+  int max;
+
+  memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+  broadcast_addr.sin_family = AF_INET;
+  broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+  broadcast_addr.sin_port = CLIENT_PORT;
+
+  while(sent < len) {
+    ret = sendto(sock, buffer + sent, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
+    if(ret < 0) {
+      return ret;
+    }
+    sent += ret;
+  }
+
+  return 0;
 }
 
 void add_crc(struct response* resp, size_t len) {
