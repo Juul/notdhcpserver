@@ -92,30 +92,14 @@ int send_request(int sock, struct sockaddr_ll* bind_addr) {
 }
 
 
-  /*
-void run_hook_script(const char* up_or_down, char* ip, char* netmask, char* password, char* cert_path, char* key_path) {
-  char* cmd;
-  if(!hook_script_path) {
-    return;
-  }
-
-  
-
-
-  if(execl(SHELL_COMMAND, hook_script_path, listen_ifname, up_or_down, ip, netmask, password, cert_path, key_path, NULL) < 0) {
-    perror("error running hook script");
-  }
-}
-  */
-
-int send_triple_ack(int sock) {
+int send_triple_ack(int sock, struct sockaddr_ll* bind_addr) {
   struct request req;
   int times = 3;
 
   req.type = htonl(REQUEST_TYPE_ACK);
 
   while(times--) {
-    if(broadcast_packet(sock, (void*) &req, sizeof(req)) < 0) {
+    if(broadcast_layer2(sock, (void*) &req, sizeof(req), CLIENT_PORT, SERVER_PORT, bind_addr) < 0) {
       return -1;
     }
     usleep(100000);
@@ -140,10 +124,7 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
     printf("  lease_ip: %s\n", inet_ntoa(ip_addr));
     printf("  lease_subnet: %s\n", inet_ntoa(subnet_addr));
     printf("  cert size: %d\n", resp->cert_size);
-  }
-  
-  if(send_triple_ack(sock) < 0) {
-    return -1;
+    printf("  key size: %d\n", resp->key_size);
   }
 
   state = STATE_DONE;
@@ -187,7 +168,7 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   return 0;
 }
 
-int handle_incoming(int sock) {
+int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   struct response* resp;
   ssize_t ret;
   socklen_t addrlen = sizeof(bind_addr);
@@ -204,6 +185,12 @@ int handle_incoming(int sock) {
     return 1;
   }  
   received += ret;
+
+  // If we're not in the connected state we probably already got a response
+  // and we're just receiving junk now, so just ignore it.
+  if(state != STATE_CONNECTED) {
+    return 1;
+  }
 
   // We didn't receive enough data to process, so wait for more
   if(received < sizeof(struct response)) {
@@ -230,6 +217,7 @@ int handle_incoming(int sock) {
   if((resp->cert_size == 0) && (resp->key_size == 0)) {
     received = 0;
     receive_complete(sock, resp, NULL, NULL);
+    send_triple_ack(sock_l2, bind_addr_l2);
     return 1;
   }
 
@@ -259,6 +247,8 @@ int handle_incoming(int sock) {
   key[resp->key_size - 1] = '\0';
 
   receive_complete(sock, resp, cert, key);
+  send_triple_ack(sock_l2, bind_addr_l2);
+
   return 1;
 }
 
@@ -421,7 +411,7 @@ int main(int argc, char** argv) {
     }
 
     if(FD_ISSET(sock, &fdset)) {
-      while(handle_incoming(sock)) {
+      while(handle_incoming(sock, sock_l2, &bind_addr_l2)) {
         // nothing here
       }
     }
