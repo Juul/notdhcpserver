@@ -1,9 +1,9 @@
 
-THIS IS A WORK IN PROGRESS.
-
 notdhcpserver is not a dhcp server. notdhcpclient is the client for notdhcpserver. 
 
 notdhcpserver and notdhcpclient are how sudo mesh extender nodes get an ip from a sudo mesh home node and how they establish a trust relationship upon physical connection.
+
+WE DO NOT YET CONSIDER THIS STABLE SOFTWARE.
 
 # Protocol
 
@@ -31,6 +31,7 @@ Immediate:
 
 Future:
 
+* Add SSL-generation and per-client SSL certs.
 * IPv6 support
 
 ## Limitations
@@ -49,10 +50,7 @@ When an extender node receives a response, it will run the script specified with
 
 Immediate:
 
-* Fix receive
-** Make it have two sockets: Raw for requests and normal for receive and ack.
 * Add crc for udp broadcast.
-* Drop extra crc32.
 * Make it keep receiving until there is no more to receive
 * Add timeout so it abandons an incoming message if no data is received for a few seconds
 

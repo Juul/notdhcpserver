@@ -29,7 +29,9 @@ struct interface {
   char* ip;
   char* netmask;
   int sock;
+  int sock_l2;
   struct sockaddr_in addr;
+  struct sockaddr_ll addr_l2;
   char password[PASSWORD_LENGTH + 1];
   int state;
   struct interface* next;
@@ -88,7 +90,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   memset(&broadcast_addr, 0, sizeof(broadcast_addr));
   broadcast_addr.sin_family = AF_INET;
   broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-  broadcast_addr.sin_port = CLIENT_PORT;
+  broadcast_addr.sin_port = htons(CLIENT_PORT);
 
   while(sent < len) {
     ret = sendto(sock, buffer + sent, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr));
@@ -99,10 +101,6 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   }
 
   return 0;
-}
-
-void add_crc(struct response* resp, size_t len) {
-  resp->crc = htonl(crc32((char*) resp + sizeof(resp->crc), len - sizeof(resp->crc)));
 }
 
 int send_response(struct interface* iface) {
@@ -121,12 +119,11 @@ int send_response(struct interface* iface) {
   if(!ssl_cert || !ssl_key) {
     resp.cert_size = 0;
     resp.key_size = 0;
-    add_crc(&resp, sizeof(resp));
-    printf("CRC: %ul\n", resp.crc);
+
     if(verbose) {
       printf("%s: sending response (without ssl certificate)\n", iface->ifname);
     }
-    return broadcast_packet(iface->sock, (void*) &resp, sizeof(resp));
+    return broadcast_layer2(iface->sock_l2, (void*) &resp, sizeof(resp), SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
   }
 
   cert_size = strlen(ssl_cert) + 1;
@@ -150,16 +147,12 @@ int send_response(struct interface* iface) {
   // ensure null-terminated key string
   ((char*) sendbuf)[sizeof(resp) + cert_size + key_size - 1] = '\0';
 
-  response_size = sizeof(resp) + cert_size + key_size;
-
-  add_crc(&resp, response_size);
-
-  printf("CRC: %ul\n", resp.crc);
+  response_size = sizeof(resp) + cert_size + key_size;;
 
   if(verbose) {
     printf("%s: sending response (with ssl certificate)\n", iface->ifname);
   }
-  ret = broadcast_packet(iface->sock, sendbuf, response_size);
+  ret = broadcast_layer2(iface->sock_l2, sendbuf, response_size, SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
 
   free(sendbuf);
 
@@ -280,52 +273,18 @@ int stop_monitor_interface(struct interface* iface) {
 
 int monitor_interface(struct interface* iface) {
 
-  struct sockaddr_in bind_addr;
-  int broadcast_perm;
-  int packetlen;
-  int sockmode;
-  int sock;
-
-  if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
-    perror("creating socket failed");
+  iface->sock = open_socket(iface->ifname, &(iface->addr), SERVER_PORT);
+  if(iface->sock < 0) {
+    fprintf(stderr, "opening socket failed on %s\n", iface->ifname);
     return -1;
   }
 
-  
-  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, iface->ifname, strlen(iface->ifname)) < 0) {
-    perror("binding to device failed");
-    return -1;
-  }
-  
-  sockmode = fcntl(sock, F_GETFL, 0);
-  if(sockmode < 0) {
-    perror("error getting socket mode");
-    return -1;
-  }
-  
-  if(fcntl(sock, F_SETFL, sockmode | O_NONBLOCK) < 0) {
-    perror("failed to set non-blocking mode for socket");
+  iface->sock_l2 = open_socket_layer2(iface->ifname, &(iface->addr_l2));
+  if(iface->sock_l2 < 0) {
+    fprintf(stderr, "opening layer 2 socket failed on %s\n", iface->ifname);
     return -1;
   }
 
-  broadcast_perm = 1;
-  if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
-    perror("setting broadcast permission on socket failed");
-    return -1;
-  }
-  
-  memset(&bind_addr, 0, sizeof(bind_addr));
-  bind_addr.sin_family = AF_INET;
-  bind_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
-  bind_addr.sin_port = htons(SERVER_PORT);
-
-  if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
-    perror("failed to bind udp socket");
-    return -1;
-  }
-
-  iface->sock = sock;
-  iface->addr = bind_addr;
   iface->state = STATE_LISTENING;
 
   if(verbose) {

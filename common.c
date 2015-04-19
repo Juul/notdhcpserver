@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -52,11 +53,119 @@ unsigned short calc_checksum(unsigned char *data, int len) {
     return ~sum;
 }
 
-int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uint16_t dest_port, struct sockaddr_ll* dest_addr) {
+int open_socket(char* ifname, struct sockaddr_in* bind_addr, unsigned short listen_port) {
+  int sock;
+  int sockmode;
+  int one = 1;
+
+  if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+    perror("creating socket failed");
+    return -1;
+  }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)+1) < 0) {
+    perror("binding to device failed");
+    return -1;
+  }
+
+  sockmode = fcntl(sock, F_GETFL, 0);
+  if(sockmode < 0) {
+    perror("error getting socket mode");
+    return -1;
+  }
+  
+  if(fcntl(sock, F_SETFL, sockmode | O_NONBLOCK) < 0) {
+    perror("failed to set non-blocking mode for socket");
+    return -1;
+  }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void *) &one, sizeof(one)) < 0) {
+    perror("setting SO_REUSEADDR on socket failed");
+    return -1;
+  }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (void *) &one, sizeof(one)) < 0) {
+    perror("setting SO_REUSEPORT on socket failed");
+    return -1;
+  }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &one, sizeof(one)) < 0) {
+    perror("setting broadcast permission on socket failed");
+    return -1;
+  }
+
+  memset(bind_addr, 0, sizeof(bind_addr));
+  bind_addr->sin_family = AF_INET;
+  bind_addr->sin_addr.s_addr = inet_addr("255.255.255.255");
+  bind_addr->sin_port = htons(listen_port);
+  
+  if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_in)) < 0) {
+    perror("failed to bind udp socket");
+    return -1;
+  }
+  
+  return sock;
+}
+
+int close_socket(int sock) {
+  return close(sock);
+}
+
+int open_socket_layer2(char* ifname, struct sockaddr_ll* bind_addr) {
+
+  unsigned padding;
+  int sock;
+  int result = -1;
+  const char *msg;
+  int ifindex;
+  int one = 1;
+  const unsigned char broadcast_mac[] = {0xff,0xff,0xff,0xff,0xff,0xff};
+
+  sock = socket(PF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
+	if (sock < 0) {
+    perror("error creating socket");
+    exit(1);
+	}
+
+  if(setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void *) &one, sizeof(one)) < 0) {
+    perror("setting SO_REUSEADDR on layer2 socket failed");
+    return -1;
+  }
+
+  if(setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (void *) &one, sizeof(one)) < 0) {
+    perror("setting SO_REUSEPORT on layer2 socket failed");
+    return -1;
+  }
+
+  memset(bind_addr, 0, sizeof(struct sockaddr_ll));
+
+	bind_addr->sll_family = AF_PACKET;
+	bind_addr->sll_protocol = htons(ETH_P_IP);
+	bind_addr->sll_halen = 6;
+	memcpy(bind_addr->sll_addr, broadcast_mac, 6);
+
+  ifindex = ifindex_from_ifname(sock, ifname);
+  if(ifindex < 0) {
+    printf("error getting ifindex\n");
+    exit(1);
+  }
+
+	bind_addr->sll_ifindex = ifindex;
+
+	if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_ll)) < 0) {
+    perror("error calling bind()");
+    exit(1);
+	}
+
+  return sock;
+}
+
+int broadcast_layer2(int sock, void* buffer, size_t len, uint16_t src_port, uint16_t dest_port, struct sockaddr_ll* dest_addr) {
   //  struct sockaddr_in dest_addr;
   struct iphdr* ip_header;
   struct udphdr* udp_header;
   void* payload;
+  void* alt;
   size_t packet_size;
   ssize_t sent = 0;
   ssize_t ret;
@@ -72,7 +181,8 @@ int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uin
 
   ip_header = data;
   udp_header = data + sizeof(struct iphdr);
-  payload = udp_header + sizeof(struct udphdr);
+  payload = data + sizeof(struct iphdr) + sizeof(struct udphdr);
+
   memcpy(payload, buffer, len);
 
   ip_header->version = 4;
@@ -89,7 +199,7 @@ int raw_udp_broadcast(int sock, void* buffer, size_t len, uint16_t src_port, uin
   udp_header->dest = htons(dest_port);
   udp_header->check = htons(0);
   udp_header->len = htons(sizeof(struct udphdr) + len);
-
+  
   while(sent < packet_size) {
     ret = sendto(sock, data + sent, packet_size - sent, 0, (struct sockaddr*) dest_addr, sizeof(struct sockaddr_ll));
 

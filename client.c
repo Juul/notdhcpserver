@@ -32,9 +32,9 @@
 // global variables below
 
 struct sockaddr_in bind_addr;
-struct sockaddr_ll bind_addr_raw;
+struct sockaddr_ll bind_addr_l2;
 int sock; // for receiving and sending ack
-int sock_raw; // for sending initial request
+int sock_l2; // for sending initial request
 int received = 0; // how much of current message has been received
 char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
 int state = STATE_DISCONNECTED; // track state
@@ -46,14 +46,10 @@ char* ssl_key_path = NULL; // where to write ssl key
 
 // functions declarations below
 
-uint32_t calc_crc(struct response* resp, size_t len) {
-  return crc32((char*) (resp) + sizeof(resp->crc), len - sizeof(resp->crc));
-}
-
-int broadcast_packet_raw(int sock, void* buffer, size_t len, struct sockaddr_ll* bind_addr) {
+int broadcast_packet_layer2(int sock, void* buffer, size_t len, struct sockaddr_ll* bind_addr) {
   int attempts = 3;
   
-  while(raw_udp_broadcast(sock, buffer, len, CLIENT_PORT, SERVER_PORT, bind_addr) != len) {
+  while(broadcast_layer2(sock, buffer, len, CLIENT_PORT, SERVER_PORT, bind_addr) != len) {
     // failed to send entire packet
     if(attempts--) {
       usleep(200000);
@@ -92,7 +88,7 @@ int send_request(int sock, struct sockaddr_ll* bind_addr) {
 
   req.type = htonl(REQUEST_TYPE_GETLEASE);
   
-  return broadcast_packet_raw(sock_raw, (void*) &req, sizeof(req), bind_addr);
+  return broadcast_packet_layer2(sock_l2, (void*) &req, sizeof(req), bind_addr);
 }
 
 
@@ -276,16 +272,24 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   if(connected && (state == STATE_DISCONNECTED)) {
     printf("%s: Physical connection detected\n", ifname);
 
-    sock_raw = open_raw_socket(ifname, &bind_addr_raw);
-    if(sock_raw < 0) {
+    sock_l2 = open_socket_layer2(ifname, &bind_addr_l2);
+    if(sock_l2 < 0) {
       fprintf(stderr, "Fatal error: Could not re-open socket\n");
       exit(1);
     }
 
-    sock = open_socket(ifname, &bind_addr);
+    if(verbose) {
+      printf("Layer 2 socket opened on %s\n", ifname);
+    }
+
+    sock = open_socket(ifname, &bind_addr, CLIENT_PORT);
     if(sock < 0) {
       fprintf(stderr, "Fatal error: Could not re-open socket\n");
       exit(1);
+    }
+
+    if(verbose) {
+      printf("Layer 3 socket opened on %s\n", ifname);
     }
 
     state = STATE_CONNECTED;
@@ -303,93 +307,6 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   }
 
 }
-
-int open_raw_socket(char* ifname, struct sockaddr_ll* bind_addr) {
-
-  unsigned padding;
-  int sock;
-  int result = -1;
-  const char *msg;
-  int ifindex;
-  const unsigned char broadcast_mac[] = {0xff,0xff,0xff,0xff,0xff,0xff};
-
-  sock = socket(PF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
-	if (sock < 0) {
-    perror("error creating socket");
-    exit(1);
-	}
-
-  memset(bind_addr, 0, sizeof(struct sockaddr_ll));
-
-	bind_addr->sll_family = AF_PACKET;
-	bind_addr->sll_protocol = htons(ETH_P_IP);
-	bind_addr->sll_halen = 6;
-	memcpy(bind_addr->sll_addr, broadcast_mac, 6);
-
-  ifindex = ifindex_from_ifname(sock, "eth0\0");
-  if(ifindex < 0) {
-    printf("error getting ifindex\n");
-    exit(1);
-  }
-
-	bind_addr->sll_ifindex = ifindex;
-
-	if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_ll)) < 0) {
-    perror("error calling bind()");
-    exit(1);
-	}
-
-  if(verbose) {
-    printf("Socket opened\n");
-  }
-
-  return sock;
-}
-
-int open_socket(char* ifname, struct sockaddr_in* bind_addr) {
-  int sock;
-  int sockmode;
-  int broadcast_perm;
-
-  if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
-    perror("creating socket failed");
-    return -1;
-  }
-
-  if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname)+1) < 0) {
-    perror("binding to device failed");
-    return -1;
-  }
-
-  sockmode = fcntl(sock, F_GETFL, 0);
-  if(sockmode < 0) {
-    perror("error getting socket mode");
-    return -1;
-  }
-  
-  if(fcntl(sock, F_SETFL, sockmode | O_NONBLOCK) < 0) {
-    perror("failed to set non-blocking mode for socket");
-    return -1;
-  }
-
-  broadcast_perm = 1;
-  if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
-    perror("setting broadcast permission on socket failed");
-    return -1;
-  }
-  
-  if(bind(sock, (struct sockaddr*) bind_addr, sizeof(struct sockaddr_in)) < 0) {
-    perror("failed to bind udp socket");
-    return -1;
-  }
-  
-  return sock;
-}
-
-int close_socket(int sock) {
-  return close(sock);
-}
-
 
 // call with e.g. usage(argv[0], stdin) or usage(argv[0], stderr)
 void usage(char* command_name, FILE* out) {
@@ -477,17 +394,20 @@ int main(int argc, char** argv) {
   for(;;) {
     FD_ZERO(&fdset);
 
-    if(state == STATE_CONNECTED) {
-      FD_SET(sock, &fdset);
-    }
-
     if(nlsock) {
       FD_SET(nlsock, &fdset);
     }
-    if(nlsock > sock) {
-      max_fd = nlsock;
+
+    if(state == STATE_CONNECTED) {
+      FD_SET(sock, &fdset);
+
+      if(nlsock > sock) {
+        max_fd = nlsock;
+      } else {
+        max_fd = sock;
+      }
     } else {
-      max_fd = sock;
+      max_fd = nlsock;
     }
 
     timeout.tv_sec = SEND_REQUEST_EVERY;
@@ -501,11 +421,9 @@ int main(int argc, char** argv) {
     }
 
     if(FD_ISSET(sock, &fdset)) {
-      /*
       while(handle_incoming(sock)) {
         // nothing here
       }
-      */
     }
 
     if(FD_ISSET(nlsock, &fdset)) {
@@ -514,7 +432,7 @@ int main(int argc, char** argv) {
 
     if((state == STATE_CONNECTED) && (time(NULL) - last_request >= SEND_REQUEST_EVERY)) {
       printf("Sending request\n");
-      send_request(sock_raw, &bind_addr_raw);
+      send_request(sock_l2, &bind_addr_l2);
       last_request = time(NULL);
     }
   }
