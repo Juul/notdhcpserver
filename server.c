@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h> 
+#include <syslog.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <time.h>
@@ -55,7 +56,7 @@ int seed_prng() {
   struct timeval time;
   
   if(gettimeofday(&time, NULL) < 0) {
-    perror("seeding prng failed");
+    syslog(LOG_ERR, "seeding prng failed");
     return -1;
   }
   srand(time.tv_usec * time.tv_sec);
@@ -234,6 +235,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
+  fprintf(out, "  -f: Don't daemonize into background.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
   fprintf(out, "  -v: Enable verbose mode\n");
@@ -287,30 +289,30 @@ int monitor_interface(struct interface* iface) {
   int sock;
 
   if((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
-    perror("creating socket failed");
+    syslog(LOG_ERR, "creating socket failed");
     return -1;
   }
 
   
   if(setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, iface->ifname, strlen(iface->ifname)) < 0) {
-    perror("binding to device failed");
+    syslog(LOG_ERR, "binding to device failed");
     return -1;
   }
   
   sockmode = fcntl(sock, F_GETFL, 0);
   if(sockmode < 0) {
-    perror("error getting socket mode");
+    syslog(LOG_ERR, "error getting socket mode");
     return -1;
   }
   
   if(fcntl(sock, F_SETFL, sockmode | O_NONBLOCK) < 0) {
-    perror("failed to set non-blocking mode for socket");
+    syslog(LOG_ERR, "failed to set non-blocking mode for socket");
     return -1;
   }
 
   broadcast_perm = 1;
   if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &broadcast_perm, sizeof(broadcast_perm)) < 0) {
-    perror("setting broadcast permission on socket failed");
+    syslog(LOG_ERR, "setting broadcast permission on socket failed");
     return -1;
   }
   
@@ -320,7 +322,7 @@ int monitor_interface(struct interface* iface) {
   bind_addr.sin_port = htons(SERVER_PORT);
 
   if(bind(sock, (struct sockaddr*) &bind_addr, sizeof(bind_addr)) < 0) {
-    perror("failed to bind udp socket");
+    syslog(LOG_ERR, "failed to bind udp socket");
     return -1;
   }
 
@@ -411,22 +413,22 @@ char* load_file(char* path, int size) {
 
   f = fopen(path, "r");
   if(!f) {
-    perror("Opening certificate or key file failed");
+    syslog(LOG_ERR, "Opening certificate or key file failed");
     return NULL;
   }
 
   bytes_read = fread(buf, 1, size, f);
   if(ferror(f)) {
-    perror("Error reading certificate or key file");
+    syslog(LOG_ERR, "Error reading certificate or key file");
     return NULL;
   }
   if(bytes_read <= 0) {
-    fprintf(stderr, "Reading certificate or key file failed. Is the file empty?\n");
+    syslog(LOG_ERR, "Reading certificate or key file failed. Is the file empty?\n");
     return NULL;
   }
 
   if(fclose(f) == EOF) {
-    fprintf(stderr, "Closing certificate file failed.\n");
+    syslog(LOG_ERR, "Closing certificate file failed.\n");
     return NULL;
   }
 
@@ -482,16 +484,20 @@ int main(int argc, char** argv) {
   extern int optind;
   struct interface* iface;
   int c;
+  int log_option = 0;
 
   if(argc <= 0) {
     usagefail(NULL);
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:k:s:vh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:vfh")) != -1) {
     switch (c) {
     case 's':
       hook_script_path = optarg;
+      break;
+    case 'f': 
+      log_option |= LOG_PERROR;
       break;
     case 'c':
       ssl_cert_path = optarg;
@@ -523,8 +529,11 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
+  // Open the syslog facility
+  openlog("notdhcpclient", log_option, LOG_DAEMON);
+
   if((ssl_cert && !ssl_key) || (!ssl_cert && ssl_key)) {
-    fprintf(stderr, "If you supply a certificate path then you must also supply a key path and vice versa.\n");
+    syslog(LOG_ERR, "If you supply a certificate path then you must also supply a key path and vice versa.\n");
     usagefail(argv[0]);
     exit(1);
   }
@@ -535,7 +544,7 @@ int main(int argc, char** argv) {
 
   nlsock = netlink_open_socket();
   if(nlsock < 0) {
-    fprintf(stderr, "could not open netlink socket\n");
+    syslog(LOG_ERR, "could not open netlink socket\n");
     exit(1);
   }
 
@@ -568,10 +577,10 @@ int main(int argc, char** argv) {
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
-        printf("huh?\n"); // TODO when does this happen
+        syslog(LOG_DEBUG, "huh?\n");// TODO when does this happen
         continue;
       }
-      perror("error during select");
+      syslog(LOG_ERR, "error during select");
     }
 
     if(FD_ISSET(nlsock, &fdset)) {
