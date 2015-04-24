@@ -140,11 +140,11 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   subnet_addr.s_addr = (unsigned long) resp->lease_netmask;
 
   if(verbose) {
-    syslog(LOG_ERR, "Response received:\n");
-    syslog(LOG_ERR, "  type: %d\n", resp->type);
-    syslog(LOG_ERR, "  lease_ip: %s\n", inet_ntoa(ip_addr));
-    syslog(LOG_ERR, "  lease_subnet: %s\n", inet_ntoa(subnet_addr));
-    syslog(LOG_ERR, "  cert size: %d\n", resp->cert_size);
+    syslog(LOG_DEBUG, "Response received:\n");
+    syslog(LOG_DEBUG, "  type: %d\n", resp->type);
+    syslog(LOG_DEBUG, "  lease_ip: %s\n", inet_ntoa(ip_addr));
+    syslog(LOG_DEBUG, "  lease_subnet: %s\n", inet_ntoa(subnet_addr));
+    syslog(LOG_DEBUG, "  cert size: %d\n", resp->cert_size);
   }
   
   if(send_triple_ack(sock) < 0) {

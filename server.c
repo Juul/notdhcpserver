@@ -332,9 +332,9 @@ int monitor_interface(struct interface* iface) {
   iface->state = STATE_LISTENING;
 
   if(verbose) {
-    printf("Listening on interface %s:\n", iface->ifname);
-    printf("  client IP: %s\n", iface->ip);
-    printf("  client netmask %s\n\n", iface->netmask);
+    syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
+    syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
+    syslog(LOG_DEBUG, "  client netmask %s\n\n", iface->netmask);
   }
 
   return 0;
