@@ -84,10 +84,12 @@ int open_socket(char* ifname, struct sockaddr_in* bind_addr, unsigned short list
     return -1;
   }
 
+  /*
   if(setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (void *) &one, sizeof(one)) < 0) {
     perror("setting SO_REUSEPORT on socket failed");
     return -1;
   }
+  */
 
   if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *) &one, sizeof(one)) < 0) {
     perror("setting broadcast permission on socket failed");
@@ -132,11 +134,12 @@ int open_socket_layer2(char* ifname, struct sockaddr_ll* bind_addr) {
     return -1;
   }
 
+  /*
   if(setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (void *) &one, sizeof(one)) < 0) {
     perror("setting SO_REUSEPORT on layer2 socket failed");
     return -1;
   }
-
+  */
   memset(bind_addr, 0, sizeof(struct sockaddr_ll));
 
 	bind_addr->sll_family = AF_PACKET;

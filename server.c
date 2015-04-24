@@ -265,7 +265,7 @@ struct interface* new_interface() {
 struct interface* add_interface(struct interface* iface) {
   struct interface* cur = interfaces;
 
-  iface->next = 0;
+  iface->next = NULL;
   if(!interfaces) {
     interfaces = iface;
   } else {
@@ -376,6 +376,10 @@ int parse_args(int argc, char** argv) {
 char* load_file(char* path, int size) {
   FILE* f;
   char* buf = malloc(size);
+  if(!buf) {
+    syslog(LOG_ERR, "Allocating memory for file failed");
+    return NULL;
+  }
   size_t bytes_read;
 
   f = fopen(path, "r");
@@ -500,7 +504,7 @@ int main(int argc, char** argv) {
   }
 
   // Open the syslog facility
-  openlog("notdhcpclient", log_option, LOG_DAEMON);
+  openlog("notdhcpserver", log_option, LOG_DAEMON);
 
   if((ssl_cert && !ssl_key) || (!ssl_cert && ssl_key)) {
     syslog(LOG_ERR, "If you supply a certificate path then you must also supply a key path and vice versa.\n");
@@ -547,7 +551,6 @@ int main(int argc, char** argv) {
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
-        syslog(LOG_WARNING, "huh?\n");// TODO when does this happen
         continue;
       }
       syslog(LOG_ERR, "error during select");
