@@ -122,6 +122,7 @@ int send_response(struct interface* iface) {
 
     if(verbose) {
       printf("%s: sending response (without ssl certificate)\n", iface->ifname);
+      fflush(stdout);
     }
     return broadcast_layer2(iface->sock_l2, (void*) &resp, sizeof(resp), SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
   }
@@ -151,6 +152,7 @@ int send_response(struct interface* iface) {
 
   if(verbose) {
     printf("%s: sending response (with ssl certificate)\n", iface->ifname);
+    fflush(stdout);
   }
   ret = broadcast_layer2(iface->sock_l2, sendbuf, response_size, SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
 
@@ -186,6 +188,7 @@ int handle_incoming(struct interface* iface) {
   if(req.type == REQUEST_TYPE_GETLEASE) {
     if(verbose) {
       printf("%s: Received lease request\n", iface->ifname);
+      fflush(stdout);
     }
     generate_password(iface->password, PASSWORD_LENGTH + 1);
 
@@ -197,15 +200,18 @@ int handle_incoming(struct interface* iface) {
     if(iface->state == STATE_GOT_ACK) {
       if(verbose) {
         printf("%s: Received redundant ACK\n", iface->ifname);
+        fflush(stdout);
       }
       return 1;
     }
     if(verbose) {
       printf("%s: Received ACK\n", iface->ifname);
+      fflush(stdout);
     }
     iface->state = STATE_GOT_ACK;
     if(verbose) {
       printf("%s: Running up hook script\n", iface->ifname);
+      fflush(stdout);
     }
     run_hook_script(hook_script_path, iface->ifname, "up", NULL);
     return 1;
@@ -213,6 +219,7 @@ int handle_incoming(struct interface* iface) {
 
   if(verbose) {
     printf("%s: Got unknown request type\n", iface->ifname);
+    fflush(stdout);
   }
   
   return 1;
@@ -237,6 +244,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "\n");
   fprintf(out, "  %s eth0.2=100.64.0.2/255.255.255.192 eth0.3=100.64.0.3/255.255.255.192\n", command_name);
   fprintf(out, "\n");
+  fflush(out);
 }
 
 void usagefail(char* command_name) {
@@ -291,6 +299,7 @@ int monitor_interface(struct interface* iface) {
     printf("Listening on interface %s:\n", iface->ifname);
     printf("  client IP: %s\n", iface->ip);
     printf("  client netmask %s\n\n", iface->netmask);
+    fflush(stdout);
   }
 
   return 0;
@@ -408,6 +417,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
         if(iface->state == STATE_STOPPED) {
           if(verbose) {
             printf("%s: Physical connection detected\n", ifname);
+            fflush(stdout);
           }
           if(monitor_interface(iface) < 0) {
             return;
@@ -422,6 +432,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
           }
           if(verbose) {
             printf("%s: Physical disconnect detected\n", ifname);
+            fflush(stdout);
           }
           run_hook_script(hook_script_path, iface->ifname, "down", NULL);
         }
@@ -468,6 +479,7 @@ int main(int argc, char** argv) {
       break;
     case 'v': 
       printf("Verbose mode enabled\n");
+      fflush(stdout);
       verbose = 1; 
       break; 
     case 'h':
@@ -527,7 +539,7 @@ int main(int argc, char** argv) {
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
-        printf("huh?\n"); // TODO when does this happen
+        // TODO when does this happen
         continue;
       }
       perror("error during select");

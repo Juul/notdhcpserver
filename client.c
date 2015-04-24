@@ -125,6 +125,7 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
     printf("  lease_subnet: %s\n", inet_ntoa(subnet_addr));
     printf("  cert size: %d\n", resp->cert_size);
     printf("  key size: %d\n", resp->key_size);
+    fflush(stdout);
   }
 
   state = STATE_DONE;
@@ -210,6 +211,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   if(resp->type != RESPONSE_TYPE) {
     if(verbose) {
       printf("Unknown data received\n");
+      fflush(stdout);
     }
     return 1;
   }
@@ -261,6 +263,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 
   if(connected && (state == STATE_DISCONNECTED)) {
     printf("%s: Physical connection detected\n", ifname);
+    fflush(stdout);
 
     sock_l2 = open_socket_layer2(ifname, &bind_addr_l2);
     if(sock_l2 < 0) {
@@ -270,6 +273,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 
     if(verbose) {
       printf("Layer 2 socket opened on %s\n", ifname);
+      fflush(stdout);
     }
 
     sock = open_socket(ifname, &bind_addr, CLIENT_PORT);
@@ -280,6 +284,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 
     if(verbose) {
       printf("Layer 3 socket opened on %s\n", ifname);
+      fflush(stdout);
     }
 
     state = STATE_CONNECTED;
@@ -288,6 +293,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
     if(state != STATE_DISCONNECTED) {
 
       printf("%s: Physical disconnect detected\n", ifname);
+      fflush(stdout);
 
       state = STATE_DISCONNECTED;
       close_socket(sock);
@@ -316,6 +322,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "\n");
   fprintf(out, "  %s eth0\n", command_name);
   fprintf(out, "\n");
+  fflush(out);
 }
 
 void usagefail(char* command_name) {
@@ -354,6 +361,7 @@ int main(int argc, char** argv) {
       break;
     case 'v': 
       printf("Verbose mode enabled\n");
+      fflush(stdout);
       verbose = 1; 
       break; 
     case 'h':
@@ -422,6 +430,7 @@ int main(int argc, char** argv) {
 
     if((state == STATE_CONNECTED) && (time(NULL) - last_request >= SEND_REQUEST_EVERY)) {
       printf("Sending request\n");
+      fflush(stdout);
       send_request(sock_l2, &bind_addr_l2);
       last_request = time(NULL);
     }
