@@ -235,7 +235,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
-  fprintf(out, "  -f: Don't daemonize into background.\n");  
+  fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
   fprintf(out, "  -v: Enable verbose mode\n");
@@ -439,6 +439,7 @@ char* load_file(char* path, int size) {
   return buf;
 }
 
+
 void physical_ethernet_state_change(char* ifname, int connected) {
   struct interface* iface;
 
@@ -464,7 +465,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
             return;
           }
           if(verbose) {
-            printf("%s: Physical disconnect detected\n", ifname);
+            syslog(LOG_ERR, "%s: Physical disconnect detected\n", ifname);
           }
           run_hook_script(hook_script_path, iface->ifname, "down", NULL);
         }
@@ -484,7 +485,7 @@ int main(int argc, char** argv) {
   extern int optind;
   struct interface* iface;
   int c;
-  int log_option = 0;
+  int log_option = LOG_PERROR;
 
   if(argc <= 0) {
     usagefail(NULL);
@@ -497,7 +498,7 @@ int main(int argc, char** argv) {
       hook_script_path = optarg;
       break;
     case 'f': 
-      log_option |= LOG_PERROR;
+      log_option = 0;
       break;
     case 'c':
       ssl_cert_path = optarg;
@@ -596,6 +597,6 @@ int main(int argc, char** argv) {
       }
     } while(iface = iface->next);
   }  
-  
+
   return 0;
 }

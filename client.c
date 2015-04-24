@@ -401,6 +401,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] interface\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s hook_script: Hook script to run upon receiving \"lease\"\n");
+  fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Where to write SSL cert\n");
   fprintf(out, "  -k ssl_key: Where to write SSL key\n");
   fprintf(out, "  -v: Enable verbose mode\n");
@@ -427,7 +428,7 @@ int main(int argc, char** argv) {
   struct timeval timeout;
   time_t last_request = 0;
   int c;
-  int log_option = 0;
+  int log_option = LOG_PERROR;
 
   state = STATE_DISCONNECTED;
   
@@ -445,7 +446,7 @@ int main(int argc, char** argv) {
       ssl_cert_path = optarg;
       break;
     case 'f': 
-      log_option |= LOG_PERROR;
+      log_option = 0;
       break;
     case 'k':
       ssl_key_path = optarg;
