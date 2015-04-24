@@ -264,6 +264,7 @@ struct interface* new_interface() {
 struct interface* add_interface(struct interface* iface) {
   struct interface* cur = interfaces;
 
+  iface->next = 0;
   if(!interfaces) {
     interfaces = iface;
   } else {
