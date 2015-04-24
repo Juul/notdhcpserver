@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h> 
+#include <syslog.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <time.h>
@@ -57,7 +58,7 @@ int seed_prng() {
   struct timeval time;
   
   if(gettimeofday(&time, NULL) < 0) {
-    perror("seeding prng failed");
+    syslog(LOG_ERR, "seeding prng failed");
     return -1;
   }
   srand(time.tv_usec * time.tv_sec);
@@ -234,6 +235,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
+  fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
   fprintf(out, "  -v: Enable verbose mode\n");
@@ -263,6 +265,7 @@ struct interface* new_interface() {
 struct interface* add_interface(struct interface* iface) {
   struct interface* cur = interfaces;
 
+  iface->next = 0;
   if(!interfaces) {
     interfaces = iface;
   } else {
@@ -281,25 +284,23 @@ int stop_monitor_interface(struct interface* iface) {
 
 int monitor_interface(struct interface* iface) {
 
-  iface->sock = open_socket(iface->ifname, &(iface->addr), SERVER_PORT);
   if(iface->sock < 0) {
-    fprintf(stderr, "opening socket failed on %s\n", iface->ifname);
+    syslog(LOG_ERR, "opening socket failed on %s\n", iface->ifname);
     return -1;
   }
 
   iface->sock_l2 = open_socket_layer2(iface->ifname, &(iface->addr_l2));
   if(iface->sock_l2 < 0) {
-    fprintf(stderr, "opening layer 2 socket failed on %s\n", iface->ifname);
+    syslog(LOG_ERR, "opening layer 2 socket failed on %s\n", iface->ifname);
     return -1;
   }
 
   iface->state = STATE_LISTENING;
 
   if(verbose) {
-    printf("Listening on interface %s:\n", iface->ifname);
-    printf("  client IP: %s\n", iface->ip);
-    printf("  client netmask %s\n\n", iface->netmask);
-    fflush(stdout);
+    syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
+    syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
+    syslog(LOG_DEBUG, "  client netmask %s\n\n", iface->netmask);
   }
 
   return 0;
@@ -379,22 +380,22 @@ char* load_file(char* path, int size) {
 
   f = fopen(path, "r");
   if(!f) {
-    perror("Opening certificate or key file failed");
+    syslog(LOG_ERR, "Opening certificate or key file failed");
     return NULL;
   }
 
   bytes_read = fread(buf, 1, size, f);
   if(ferror(f)) {
-    perror("Error reading certificate or key file");
+    syslog(LOG_ERR, "Error reading certificate or key file");
     return NULL;
   }
   if(bytes_read <= 0) {
-    fprintf(stderr, "Reading certificate or key file failed. Is the file empty?\n");
+    syslog(LOG_ERR, "Reading certificate or key file failed. Is the file empty?\n");
     return NULL;
   }
 
   if(fclose(f) == EOF) {
-    fprintf(stderr, "Closing certificate file failed.\n");
+    syslog(LOG_ERR, "Closing certificate file failed.\n");
     return NULL;
   }
 
@@ -404,6 +405,7 @@ char* load_file(char* path, int size) {
 
   return buf;
 }
+
 
 void physical_ethernet_state_change(char* ifname, int connected) {
   struct interface* iface;
@@ -431,8 +433,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
             return;
           }
           if(verbose) {
-            printf("%s: Physical disconnect detected\n", ifname);
-            fflush(stdout);
+            syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
           run_hook_script(hook_script_path, iface->ifname, "down", NULL);
         }
@@ -452,16 +453,20 @@ int main(int argc, char** argv) {
   extern int optind;
   struct interface* iface;
   int c;
+  int log_option = LOG_PERROR;
 
   if(argc <= 0) {
     usagefail(NULL);
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:k:s:vh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:vfh")) != -1) {
     switch (c) {
     case 's':
       hook_script_path = optarg;
+      break;
+    case 'f': 
+      log_option = 0;
       break;
     case 'c':
       ssl_cert_path = optarg;
@@ -494,8 +499,11 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
+  // Open the syslog facility
+  openlog("notdhcpclient", log_option, LOG_DAEMON);
+
   if((ssl_cert && !ssl_key) || (!ssl_cert && ssl_key)) {
-    fprintf(stderr, "If you supply a certificate path then you must also supply a key path and vice versa.\n");
+    syslog(LOG_ERR, "If you supply a certificate path then you must also supply a key path and vice versa.\n");
     usagefail(argv[0]);
     exit(1);
   }
@@ -506,7 +514,7 @@ int main(int argc, char** argv) {
 
   nlsock = netlink_open_socket();
   if(nlsock < 0) {
-    fprintf(stderr, "could not open netlink socket\n");
+    syslog(LOG_ERR, "could not open netlink socket\n");
     exit(1);
   }
 
@@ -539,10 +547,10 @@ int main(int argc, char** argv) {
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
-        // TODO when does this happen
+        syslog(LOG_WARNING, "huh?\n");// TODO when does this happen
         continue;
       }
-      perror("error during select");
+      syslog(LOG_ERR, "error during select");
     }
 
     if(FD_ISSET(nlsock, &fdset)) {
@@ -558,6 +566,6 @@ int main(int argc, char** argv) {
       }
     } while(iface = iface->next);
   }  
-  
+
   return 0;
 }

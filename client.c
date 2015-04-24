@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <syslog.h>
 #include <unistd.h> 
 #include <fcntl.h>
 #include <sys/time.h>
@@ -54,7 +55,7 @@ int broadcast_packet_layer2(int sock, void* buffer, size_t len, struct sockaddr_
     if(attempts--) {
       usleep(200000);
     } else {
-      fprintf(stderr, "broadcast failed after several attempts\n");
+      syslog(LOG_ERR, "broadcast failed after several attempts\n");
       return -1;
     }
   }
@@ -73,7 +74,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   while(sendto(sock, buffer, len, 0, (struct sockaddr *) &broadcast_addr, sizeof(broadcast_addr)) != len) {
     // failed to send entire packet
     if(--attempts) {
-      fprintf(stderr, "broadcast failed after several attempts\n");
+      syslog(LOG_ERR, "broadcast failed after several attempts\n");
       usleep(200000);
     } else {
       return -1;
@@ -93,6 +94,7 @@ int send_request(int sock, struct sockaddr_ll* bind_addr) {
 
 
 int send_triple_ack(int sock, struct sockaddr_ll* bind_addr) {
+
   struct request req;
   int times = 3;
 
@@ -119,13 +121,12 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   subnet_addr.s_addr = (unsigned long) resp->lease_netmask;
 
   if(verbose) {
-    printf("Response received:\n");
-    printf("  type: %d\n", resp->type);
-    printf("  lease_ip: %s\n", inet_ntoa(ip_addr));
-    printf("  lease_subnet: %s\n", inet_ntoa(subnet_addr));
-    printf("  cert size: %d\n", resp->cert_size);
-    printf("  key size: %d\n", resp->key_size);
-    fflush(stdout);
+    syslog(LOG_DEBUG, "Response received:\n");
+    syslog(LOG_DEBUG, "  type: %d\n", resp->type);
+    syslog(LOG_DEBUG, "  lease_ip: %s\n", inet_ntoa(ip_addr));
+    syslog(LOG_DEBUG, "  lease_subnet: %s\n", inet_ntoa(subnet_addr));
+    syslog(LOG_DEBUG, "  cert size: %d\n", resp->cert_size);
+
   }
 
   state = STATE_DONE;
@@ -134,11 +135,11 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   if(ssl_cert_path && cert) {
     out = fopen(ssl_cert_path, "w+");
     if(!out) {
-      perror("failed to write SSL cert");
+      syslog(LOG_ERR, "failed to write SSL cert");
     }
     written = fwrite(cert, 1, resp->cert_size - 1, out);
     if(written != (resp->cert_size - 1)) {
-      fprintf(stderr, "failed to write SSL cert: incomplete write\n");
+      syslog(LOG_ERR, "failed to write SSL cert: incomplete write\n");
     } else {
       wrote_cert = 1;
     }
@@ -149,11 +150,11 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   if(ssl_key_path && key) {
     out = fopen(ssl_key_path, "w+");
     if(!out) {
-      perror("failed to write SSL key");
+      syslog(LOG_ERR, "failed to write SSL key");
     }
     written = fwrite(key, 1, resp->key_size - 1, out);
     if(written != (resp->key_size - 1)) {
-      fprintf(stderr, "failed to write SSL key: incomplete write\n");
+      syslog(LOG_ERR, "failed to write SSL key: incomplete write\n");
     } else {
       wrote_cert = 1;
     }
@@ -182,7 +183,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
     if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
       return 0;
     }
-    perror("error receiving packet 1");
+    syslog(LOG_ERR, "error receiving packet 1");
     return 1;
   }  
   received += ret;
@@ -210,8 +211,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
 
   if(resp->type != RESPONSE_TYPE) {
     if(verbose) {
-      printf("Unknown data received\n");
-      fflush(stdout);
+      syslog(LOG_ERR, "Unknown data received\n");
     }
     return 1;
   }
@@ -224,13 +224,13 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   }
 
   if(resp->cert_size > MAX_CERT_SIZE) {
-    fprintf(stderr, "server trying to send SSL certificate that's too big\n");
+    syslog(LOG_ERR, "server trying to send SSL certificate that's too big\n");
     received = 0;
     return 1;
   }
 
   if(resp->key_size > MAX_KEY_SIZE) {
-    fprintf(stderr, "server trying to send SSL key that's too big\n");
+    syslog(LOG_ERR, "server trying to send SSL key that's too big\n");
     received = 0;
     return 1;
   }
@@ -262,28 +262,26 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   }
 
   if(connected && (state == STATE_DISCONNECTED)) {
-    printf("%s: Physical connection detected\n", ifname);
-    fflush(stdout);
+    syslog(LOG_DEBUG, "%s: Physical connection detected\n", ifname);
 
     sock_l2 = open_socket_layer2(ifname, &bind_addr_l2);
     if(sock_l2 < 0) {
-      fprintf(stderr, "Fatal error: Could not re-open socket\n");
+      syslog(LOG_DEBUG, "Fatal error: Could not re-open socket\n");
       exit(1);
     }
 
     if(verbose) {
-      printf("Layer 2 socket opened on %s\n", ifname);
-      fflush(stdout);
+      syslog(LOG_DEBUG, "Layer 2 socket opened on %s\n", ifname);
     }
 
     sock = open_socket(ifname, &bind_addr, CLIENT_PORT);
     if(sock < 0) {
-      fprintf(stderr, "Fatal error: Could not re-open socket\n");
+      syslog(LOG_ERR, "Fatal error: Could not re-open socket\n");
       exit(1);
     }
 
     if(verbose) {
-      printf("Layer 3 socket opened on %s\n", ifname);
+      syslog(LOG_DEBUG, "Layer 3 socket opened on %s\n", ifname);
       fflush(stdout);
     }
 
@@ -292,8 +290,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   } else if(!connected) {
     if(state != STATE_DISCONNECTED) {
 
-      printf("%s: Physical disconnect detected\n", ifname);
-      fflush(stdout);
+      syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
 
       state = STATE_DISCONNECTED;
       close_socket(sock);
@@ -313,6 +310,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] interface\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s hook_script: Hook script to run upon receiving \"lease\"\n");
+  fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Where to write SSL cert\n");
   fprintf(out, "  -k ssl_key: Where to write SSL key\n");
   fprintf(out, "  -v: Enable verbose mode\n");
@@ -340,6 +338,7 @@ int main(int argc, char** argv) {
   struct timeval timeout;
   time_t last_request = 0;
   int c;
+  int log_option = LOG_PERROR;
 
   state = STATE_DISCONNECTED;
   
@@ -348,13 +347,16 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "s:c:k:vh")) != -1) {
+  while((c = getopt(argc, argv, "s:c:k:fvh")) != -1) {
     switch (c) {
     case 's':
       hook_script_path = optarg;
       break;
     case 'c':
       ssl_cert_path = optarg;
+      break;
+    case 'f': 
+      log_option = 0;
       break;
     case 'k':
       ssl_key_path = optarg;
@@ -376,16 +378,19 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
+  // Open the syslog facility
+  openlog("notdhcpclient", log_option, LOG_DAEMON);
+
   listen_ifname = argv[optind];
 
   nlsock = netlink_open_socket();
   if(nlsock < 0) {
-    fprintf(stderr, "Fatal error: Could not open netlink socket\n");
+    syslog(LOG_ERR, "Fatal error: Could not open netlink socket\n");
     exit(1);
   }
 
   if(netlink_send_request(nlsock) < 0) {
-    perror("Fatal error: Failed to send netlink request");
+    syslog(LOG_ERR, "Fatal error: Failed to send netlink request");
     exit(1);
   }
   
@@ -415,7 +420,7 @@ int main(int argc, char** argv) {
       if(errno == EINTR) {
         continue;
       }
-      perror("error during select");
+      syslog(LOG_ERR, "error during select");
     }
 
     if(FD_ISSET(sock, &fdset)) {
@@ -429,8 +434,7 @@ int main(int argc, char** argv) {
     }
 
     if((state == STATE_CONNECTED) && (time(NULL) - last_request >= SEND_REQUEST_EVERY)) {
-      printf("Sending request\n");
-      fflush(stdout);
+      syslog(LOG_DEBUG, "Sending request\n");
       send_request(sock_l2, &bind_addr_l2);
       last_request = time(NULL);
     }
