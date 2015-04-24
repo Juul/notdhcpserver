@@ -465,7 +465,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
             return;
           }
           if(verbose) {
-            syslog(LOG_ERR, "%s: Physical disconnect detected\n", ifname);
+            syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
           run_hook_script(hook_script_path, iface->ifname, "down", NULL);
         }
@@ -578,7 +578,7 @@ int main(int argc, char** argv) {
 
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
       if(errno == EINTR) {
-        syslog(LOG_DEBUG, "huh?\n");// TODO when does this happen
+        syslog(LOG_ERR, "huh?\n");// TODO when does this happen
         continue;
       }
       syslog(LOG_ERR, "error during select");
