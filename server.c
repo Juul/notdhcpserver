@@ -284,6 +284,7 @@ int stop_monitor_interface(struct interface* iface) {
 
 int monitor_interface(struct interface* iface) {
 
+  iface->sock = open_socket(iface->ifname, &(iface->addr), SERVER_PORT);
   if(iface->sock < 0) {
     syslog(LOG_ERR, "opening socket failed on %s\n", iface->ifname);
     return -1;
