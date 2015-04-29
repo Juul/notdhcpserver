@@ -3,7 +3,7 @@ notdhcpserver is not a dhcp server. notdhcpclient is the client for notdhcpserve
 
 notdhcpserver and notdhcpclient are how sudo mesh extender nodes get an ip from a sudo mesh home node and how they establish a trust relationship upon physical connection.
 
-WE DO NOT YET CONSIDER THIS STABLE SOFTWARE.
+While this is fWE DO NOT YET CONSIDER THIS STABLE SOFTWARE.
 
 # Protocol
 
@@ -27,7 +27,7 @@ When the home node receives an ack it will run the script specified with -s on t
 
 Immediate:
 
-* CRC isn't working
+* CRC for UDP isn't implemented
 
 Future:
 
@@ -44,13 +44,28 @@ Future:
 
 ## Usage
 
-When an extender node receives a response, it will run the script specified with -s on the command line, passing the interface name, IP, netmask and path to SSL cert as the 1st, 2nd, 3rd and 4th command-line arguments to the script. 
+When an extender node receives a response, it will run the hook script specified with -s on the command line, passing the following arguments:
+
+When client gets an IP:
+
+1. The string "up"
+2. The receiving interface name
+3. The received IP
+4. The received netmask
+5. The received password
+6. Path to the received SSL certificate (optional)
+7. Path to the received SSL key and path to SSL cert as the 1st, 2nd, 3rd and 4th command-line arguments to the script. (optional)
+
+When physical connection goes away:
+
+1. The string "down"
+2. The receiving interface name
 
 ## TODO
 
 Immediate:
 
-* Add crc for udp broadcast.
+* CRC for UDP isn't implemented
 * Make it keep receiving until there is no more to receive
 * Add timeout so it abandons an incoming message if no data is received for a few seconds
 

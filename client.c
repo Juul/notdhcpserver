@@ -162,9 +162,9 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   }
 
   if(wrote_cert && wrote_key) {
-    run_hook_script(hook_script_path, "up", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, ssl_cert_path, ssl_key_path, NULL);
+    run_hook_script(hook_script_path, "up", listen_ifname, inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, ssl_cert_path, ssl_key_path, NULL);
   } else {
-    run_hook_script(hook_script_path, "down", inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, NULL);
+    run_hook_script(hook_script_path, "down", listen_ifname, inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, NULL);
   }
 
   return 0;
@@ -295,7 +295,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       state = STATE_DISCONNECTED;
       close_socket(sock);
 
-      run_hook_script(hook_script_path, "down", NULL);
+      run_hook_script(hook_script_path, "down", listen_ifname, NULL);
     }
   }
 
