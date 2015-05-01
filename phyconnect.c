@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -63,7 +64,7 @@ int netlink_handle_incoming(int nlsock, void (*callback)(char*, int)) {
   struct ifinfomsg* ifmsg;
   struct rtattr* rta;
   int rta_len;
-  int* operstate;
+  uint8_t* operstate;
   char* ifname = NULL;
   int len;
   ssize_t received = 0;
@@ -102,12 +103,13 @@ int netlink_handle_incoming(int nlsock, void (*callback)(char*, int)) {
       // get the "operstate" 
       // see http://lxr.cpsc.ucalgary.ca/lxr/#linux+v2.6.33/Documentation/networking/operstates.txt
       if(rta->rta_type == IFLA_OPERSTATE) {
-        operstate = (int*) RTA_DATA(rta);
+        operstate = (uint8_t*) RTA_DATA(rta);
         got_operstate = 1;
       }
     }
 
     if(ifname && got_operstate && callback) {
+      printf("operstate for %s: %u\n", ifname, *operstate);
       if(*operstate == 6) {
         callback(ifname, 1);
       } else {
