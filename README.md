@@ -3,7 +3,21 @@ notdhcpserver is not a dhcp server. notdhcpclient is the client for notdhcpserve
 
 notdhcpserver and notdhcpclient are how sudo mesh extender nodes get an ip from a sudo mesh home node and how they establish a trust relationship upon physical connection.
 
-While this is fWE DO NOT YET CONSIDER THIS STABLE SOFTWARE.
+WE DO NOT YET CONSIDER THIS STABLE SOFTWARE.
+
+# Compiling
+
+Some of the code in this utility is specific to ethernet switches which are not supported in mainline linux, so this part will not compile. To compile without switch support (e.g. to test on your laptop). Do:
+
+```
+make not
+```
+
+To compile for OpenWRT (assuming you have a suitable build environment), simply do:
+
+```
+make
+```
 
 # Protocol
 
