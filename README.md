@@ -7,17 +7,46 @@ WE DO NOT YET CONSIDER THIS STABLE SOFTWARE.
 
 # Compiling
 
-Some of the code in this utility is specific to ethernet switches which are not supported in mainline linux, so this part will not compile. To compile without switch support (e.g. to test on your laptop). Do:
+## Compiling for a non-OpenWRT system
+
+Simply do:
 
 ```
 make not
 ```
 
-To compile for OpenWRT (assuming you have a suitable build environment), simply do:
+## Cross-compiling
+
+Before you embark on this, note that there already is an OpenWRT feed for this package here:
+
+```
+https://github.com/sudomesh/sudowrt-packages
+```
+
+However, the ability to rapidly re-compile is useful during development. 
+
+You can cross-compile using an existing OpenWRT toolchain. This will result in binaries with support for physical link state detection on integrated switch ethernet ports. You need to ensure that you have already compiled OpenWRT and that you have included libnl. 
+
+To cross-compile, first:
+
+```
+cp cross_compile_env.sh.example cross_compile_env.sh
+```
+
+Then edit cross_compile_env.sh changing BUILD_BASE to where OpenWRT is checked out and compiled and run:
+
+```
+. cross_compile_env.sh
+```
+
+Now you can cross-compile with:
 
 ```
 make
 ```
+
+
+This will set a bunch of environment variables for the current shell.
 
 # Protocol
 
@@ -96,7 +125,13 @@ The server and client currently do not include any functionality for running as 
 * Q: Why did you write this? Why not just use the dnsmasq dhcp server?
 * A: The behaviour we want is very specific. nothdcpserver hands out only one IP per interface and does not keep track of lease time. Every time there is a physical disconnect on the interface the state is reset. dnsmasq uses the IP of each interface to decide which dhcp-range to hand out on that interface. This is problematic since we use the same IP on multiple non-bridged interfaces. We still use dnsmasq for normal DHCP. We are also handing out an SSL cert and key along with the IP. Lastly, we don't want to give these IPs out to anything that isn't an extender node and we want to run both notdhcpserver and dnsmasq dhcp server on the same interface at the same time such that the interface can work as an extra LAN port until an extender node is plugged in, at which time it will be switched over to become a dedicated extender node port.
 
+# About swlib
+
+Since swlib has not been broken out as a separate package, I simply copied the files from the OpenWRT swconfig package.
+
 # License and copyright
+
+The following is true for everything except the files in the swlib/ directory:
 
 This software is licensed under the GNU General Public License v3.
 
