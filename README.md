@@ -33,7 +33,7 @@ To cross-compile, first:
 cp cross_compile_env.sh.example cross_compile_env.sh
 ```
 
-Then edit cross_compile_env.sh changing BUILD_BASE to where OpenWRT is checked out and compiled and run:
+Then edit cross_compile_env.sh changing all of the paths what makes sense for (compiled) your OpenWRT build and run:
 
 ```
 . cross_compile_env.sh
