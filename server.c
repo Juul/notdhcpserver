@@ -18,10 +18,17 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 
+#ifdef SWLIB
+#include "swlib/swlib.h"
+#include "switch.h"
+#endif
+
 #include "crc32.h"
 #include "common.h"
 #include "protocol.h"
 #include "phyconnect.h"
+
+#define VERSION "0.2"
 
 // structs below
 
@@ -51,6 +58,7 @@ char* ssl_cert = NULL;
 char* ssl_key_path = NULL;
 char* ssl_key = NULL;
 char* hook_script_path = NULL;
+int has_switch = 0;
 
 // functions declarations below
 
@@ -230,8 +238,15 @@ int handle_incoming(struct interface* iface) {
 void usage(char* command_name, FILE* out) {
   char default_command_name[] = "notdhcpserver";
   if(!command_name) {
-    command_name = (char*) &default_command_name;
+    command_name = (char*) default_command_name;
   }
+  fprintf(out, "%s version %s\n", default_command_name, VERSION);
+#ifdef SWLIB
+  printf("  Integrated switch support: True\n");
+#else
+  printf("  Integrated switch support: False\n");
+#endif
+  fprintf(out, "\n");
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
@@ -519,9 +534,33 @@ int main(int argc, char** argv) {
 
   nlsock = netlink_open_socket();
   if(nlsock < 0) {
-    syslog(LOG_ERR, "could not open netlink socket\n");
+    syslog(LOG_ERR, "Could not open netlink socket\n");
     exit(1);
   }
+
+#ifdef SWLIB
+  has_switch = switch_init();
+  if(has_switch > 0) { // TODO does this actually give an error on no switch?
+    syslog(LOG_DEBUG, "Connected to switch\n");
+  } else if(has_switch == 0) {
+    syslog(LOG_DEBUG, "No integrated switch detected\n");
+  } else {
+    syslog(LOG_DEBUG, "Switch error. Switch link detection disabled.\n");
+    has_switch = 0;
+  }
+
+  /*
+  if(has_switch) {
+    if(switch_ifname_link_status("eth0.2") == 1) {
+      printf("UP!\n");
+    } else if(switch_vlan_link_status("eth0.2") == 0) {
+      printf("down!\n");      
+    } else {
+      printf("error\n");
+    }
+  }
+  */
+#endif
 
   if(parse_args(argc - optind, argv + optind) < 0) {
     exit(1);

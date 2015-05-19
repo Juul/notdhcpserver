@@ -18,10 +18,17 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 
+#ifdef SWLIB
+#include "swlib/swlib.h"
+#include "switch.h"
+#endif
+
 #include "crc32.h"
 #include "common.h"
 #include "protocol.h"
 #include "phyconnect.h"
+
+#define VERSION "0.2"
 
 // how often to send request (in seconds)
 #define SEND_REQUEST_EVERY (2)
@@ -44,6 +51,10 @@ char* hook_script_path = NULL;
 char* listen_ifname = NULL; // interface name to listen on
 char* ssl_cert_path = NULL; // where to write ssl cert
 char* ssl_key_path = NULL; // where to write ssl key
+
+#ifdef SWLIB
+struct switch_dev* switch_dev = NULL;
+#endif
 
 // functions declarations below
 
@@ -305,8 +316,15 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 void usage(char* command_name, FILE* out) {
   char default_command_name[] = "notdhcpclient";
   if(!command_name) {
-    command_name = (char*) &default_command_name;
+    command_name = (char*) default_command_name;
   }
+  fprintf(out, "%s version %s\n", default_command_name, VERSION);
+#ifdef SWLIB
+  printf("  Integrated switch support: True\n");
+#else
+  printf("  Integrated switch support: False\n");
+#endif
+  fprintf(out, "\n");
   fprintf(out, "Usage: %s [-v] interface\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s hook_script: Hook script to run upon receiving \"lease\"\n");
@@ -380,6 +398,10 @@ int main(int argc, char** argv) {
 
   // Open the syslog facility
   openlog("notdhcpclient", log_option, LOG_DAEMON);
+
+  #ifdef SWLIB
+  switch_dev = swlib_connect(NULL);
+  #endif
 
   listen_ifname = argv[optind];
 
