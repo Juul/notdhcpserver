@@ -51,10 +51,7 @@ char* hook_script_path = NULL;
 char* listen_ifname = NULL; // interface name to listen on
 char* ssl_cert_path = NULL; // where to write ssl cert
 char* ssl_key_path = NULL; // where to write ssl key
-
-#ifdef SWLIB
-struct switch_dev* switch_dev = NULL;
-#endif
+int has_switch = 0;
 
 // functions declarations below
 
@@ -347,10 +344,25 @@ void usagefail(char* command_name) {
   return;
 }
 
+void check_switch_link() {
+  int connected;
+#ifdef SWLIB
+    connected = switch_ifname_link_status(listen_ifname);
+    if(connected >= 0) {
+      physical_ethernet_state_change(listen_ifname, connected);
+    } else {
+      syslog(LOG_ERR, "Failed to get link state from switch port\n");
+      return;
+    }
+#else
+  syslog(LOG_ERR, "Called a switch-function on a platform with no implemented switch.\n");
+#endif
+}
+
 int main(int argc, char** argv) {
 
   fd_set fdset;
-  int nlsock;
+  int nlsock = 0;
   int num_ready;
   int max_fd;
   struct timeval timeout;
@@ -399,21 +411,31 @@ int main(int argc, char** argv) {
   // Open the syslog facility
   openlog("notdhcpclient", log_option, LOG_DAEMON);
 
-  #ifdef SWLIB
-  switch_dev = swlib_connect(NULL);
-  #endif
+#ifdef SWLIB
+  has_switch = switch_init();
+  if(has_switch > 0) { // TODO does this actually give an error on no switch?
+    syslog(LOG_DEBUG, "Connected to switch\n");
+  } else if(has_switch == 0) {
+    syslog(LOG_DEBUG, "No integrated switch detected\n");
+  } else {
+    syslog(LOG_DEBUG, "Switch error. Switch link detection disabled.\n");
+    has_switch = 0;
+  }
+#endif
 
   listen_ifname = argv[optind];
 
-  nlsock = netlink_open_socket();
-  if(nlsock < 0) {
-    syslog(LOG_ERR, "Fatal error: Could not open netlink socket\n");
-    exit(1);
-  }
+  if(!has_switch) {
+    nlsock = netlink_open_socket();
+    if(nlsock < 0) {
+      syslog(LOG_ERR, "Fatal error: Could not open netlink socket\n");
+      exit(1);
+    }
 
-  if(netlink_send_request(nlsock) < 0) {
-    syslog(LOG_ERR, "Fatal error: Failed to send netlink request");
-    exit(1);
+    if(netlink_send_request(nlsock) < 0) {
+      syslog(LOG_ERR, "Fatal error: Failed to send netlink request");
+      exit(1);
+    }
   }
   
   for(;;) {
@@ -451,8 +473,12 @@ int main(int argc, char** argv) {
       }
     }
 
-    if(FD_ISSET(nlsock, &fdset)) {
-      netlink_handle_incoming(nlsock, physical_ethernet_state_change);
+    if(!has_switch) {
+      if(FD_ISSET(nlsock, &fdset)) {
+        netlink_handle_incoming(nlsock, physical_ethernet_state_change);
+      }
+    } else {
+      check_switch_link();
     }
 
     if((state == STATE_CONNECTED) && (time(NULL) - last_request >= SEND_REQUEST_EVERY)) {

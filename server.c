@@ -558,12 +558,6 @@ int main(int argc, char** argv) {
     exit(1);
   }         
 
-  nlsock = netlink_open_socket();
-  if(nlsock < 0) {
-    syslog(LOG_ERR, "Could not open netlink socket\n");
-    exit(1);
-  }
-
 #ifdef SWLIB
   has_switch = switch_init();
   if(has_switch > 0) { // TODO does this actually give an error on no switch?
@@ -574,19 +568,15 @@ int main(int argc, char** argv) {
     syslog(LOG_DEBUG, "Switch error. Switch link detection disabled.\n");
     has_switch = 0;
   }
+#endif
 
-  /*
-  if(has_switch) {
-    if(switch_ifname_link_status("eth0.2") == 1) {
-      printf("UP!\n");
-    } else if(switch_vlan_link_status("eth0.2") == 0) {
-      printf("down!\n");      
-    } else {
-      printf("error\n");
+  if(!has_switch) {
+    nlsock = netlink_open_socket();
+    if(nlsock < 0) {
+      syslog(LOG_ERR, "Could not open netlink socket\n");
+      exit(1);
     }
   }
-  */
-#endif
 
   if(parse_args(argc - optind, argv + optind) < 0) {
     exit(1);
