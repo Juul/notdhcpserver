@@ -30,6 +30,8 @@
 
 #define VERSION "0.2"
 
+#define SELECT_TIMEOUT (2)
+
 // structs below
 
 struct interface {
@@ -464,12 +466,36 @@ void physical_ethernet_state_change(char* ifname, int connected) {
   
 }
 
+
+void check_switch_links() {
+  struct interface* iface;
+  int connected;
+
+#ifdef SWLIB
+  iface = interfaces;
+  do {
+    connected = switch_ifname_link_status(iface->ifname);
+    if(connected >= 0) {
+      physical_ethernet_state_change(iface->ifname, connected);
+    } else {
+      syslog(LOG_ERR, "Failed to get link state from switch port\n");
+      continue;
+    }
+  } while(iface = iface->next);
+
+#else
+  syslog(LOG_ERR, "Called a switch-function on a platform with no implemented switch.\n");
+#endif
+}
+
+
 int main(int argc, char** argv) {
 
   fd_set fdset;
   int nlsock;
   int max_fd;
   int num_ready;
+  struct timeval timeout;
   extern int optind;
   struct interface* iface;
   int c;
@@ -584,21 +610,32 @@ int main(int argc, char** argv) {
       }
     } while(iface = iface->next);
 
-    FD_SET(nlsock, &fdset);
-    if(nlsock > max_fd) {
-      max_fd = nlsock;
+    if(!has_switch) {
+      FD_SET(nlsock, &fdset);
+      if(nlsock > max_fd) {
+        max_fd = nlsock;
+      }
     }
 
-    if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, NULL)) < 0) {
+    timeout.tv_sec = SELECT_TIMEOUT;
+    timeout.tv_usec = 0;
+
+    if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, &timeout)) < 0) {
       if(errno == EINTR) {
+        printf("EINTR\n"); // TODO remove
         continue;
       }
       syslog(LOG_ERR, "error during select");
     }
 
-    if(FD_ISSET(nlsock, &fdset)) {
-      netlink_handle_incoming(nlsock, physical_ethernet_state_change);
+    if(!has_switch) {
+      if(FD_ISSET(nlsock, &fdset)) {
+        netlink_handle_incoming(nlsock, physical_ethernet_state_change);
+      }
+    } else {
+      check_switch_links();
     }
+
     iface = interfaces;
     do {
       if(FD_ISSET(iface->sock, &fdset)) {
