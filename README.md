@@ -17,7 +17,7 @@ make not
 
 ## Cross-compiling
 
-Before you embark on this, note that there already is an OpenWRT feed for this package here:
+Before you embark on this, note that we already have an OpenWRT feed for this package here:
 
 ```
 https://github.com/sudomesh/sudowrt-packages
@@ -103,6 +103,18 @@ When physical connection goes away:
 
 1. The string "down"
 2. The receiving interface name
+
+# Integrated switches
+
+notdhcpserver and notdhcpclient can detect physical ethernet link state changes both on normal ethernet interface and on ethernet ports on integrated switches (as is common in home routers). If you are using a device with an integrated switch, then your ethernet interfaces will be called e.g. eth0.1, eth0.2 etc. where the ".1" and ".2" denote the VLAN id. 
+
+nothdcp ASSUMES YOU HAVE ONE SWITCH PORT PER INTERFACE: If you have e.g. eth0.1 mapped to e.g. port 1, 2, 3 and 4 then it will listen for port connect and disconnect events only on port 1! 
+
+The switch will have been set up to map incoming traffic on each switch port to a certain VLAN id, and this mapping is understood by notdhcp though there are some pitfalls to be aware of. 
+
+The same VLAN ids can be set on multiple ports, so the mapping is not one to one. All VLAN ids are already set on port 0 since port 0 is an internal port that is hardwired to the CPU. notdhcp ignores port 0 for this reason and simply picks the first non-zero port associated with a VLAN id. This means that notdhcp will not work correctly if e.g. you have eth0.1 which is associated with more than one port (ignoring port 0). notdhcp assumes that you have one port per in
+
+You can use the swconfig utility (included in OpenWRT) to investigate the switch port and VLAN mapping.
 
 ## TODO
 
