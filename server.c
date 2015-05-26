@@ -261,7 +261,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "For each interface where you want nothcpserver to hand out an IP \"lease\"\n");
   fprintf(out, "specify an interface+ip pair. E.g:\n");
   fprintf(out, "\n");
-  fprintf(out, "  %s eth0.2=100.64.0.2/255.255.255.192 eth0.3=100.64.0.3/255.255.255.192\n", command_name);
+  fprintf(out, "  %s eth0.2=100.64.0.2/26 eth0.3=100.64.0.3/26\n", command_name);
   fprintf(out, "\n");
   fflush(out);
 }
@@ -356,6 +356,10 @@ int parse_arg(char* arg) {
       netmask_offset = i + 1;
 
       netmask_len = strlen(arg) - netmask_offset;
+      if(netmask_len > 2) {
+        fprintf(stderr, "Netmask must be of the form e.g. /24\n");
+        break;
+      }
       iface->netmask = (char*) malloc(netmask_len + 1);
       memcpy(iface->netmask, arg + netmask_offset, netmask_len);
       iface->netmask[netmask_len] = '\0';

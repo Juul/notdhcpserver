@@ -97,7 +97,7 @@ When client gets an IP:
 4. The received netmask
 5. The received password
 6. Path to the received SSL certificate (optional)
-7. Path to the received SSL key and path to SSL cert as the 1st, 2nd, 3rd and 4th command-line arguments to the script. (optional)
+7. Path to the received SSL key (optional)
 
 When physical connection goes away:
 
