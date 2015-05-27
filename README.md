@@ -64,7 +64,22 @@ The protocol is very simple:
 
 ## Usage
 
-When the home node receives an ack it will run the script specified with -s on the command line, passing the interface name, IP and netmask as the 1st, 2nd and 3rd arguments.
+When the server receives an ACK, or a physical disconnect is detected on the network interface it will run the hook script specified with -s on the command line, passing the following arguments:
+
+When an ACK is received:
+
+1. The string "up"
+2. The interface name that received the ACK
+3. The IP that was handed out on the interface
+4. The netmask that was handed out on the interface
+5. The password that was handed out on the interface
+
+When a physical disconnect occurs:
+
+1. The string "down"
+2. The interface name that was disconnected
+3. The IP that was handed out on the interface
+4. The netmask that was handed out on the interface
 
 ## TODO
 
@@ -87,7 +102,7 @@ Future:
 
 ## Usage
 
-When an extender node receives a response, it will run the hook script specified with -s on the command line, passing the following arguments:
+When the client receives a response, it will run the hook script specified with -s on the command line, passing the following arguments:
 
 When client gets an IP:
 

@@ -224,7 +224,7 @@ int handle_incoming(struct interface* iface) {
       printf("%s: Running up hook script\n", iface->ifname);
       fflush(stdout);
     }
-    run_hook_script(hook_script_path, iface->ifname, "up", NULL);
+    run_hook_script(hook_script_path, "up", iface->ifname, iface->ip, iface->netmask, iface->password, NULL);
     return 1;
   }
 
@@ -461,7 +461,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
           if(verbose) {
             syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
-          run_hook_script(hook_script_path, iface->ifname, "down", NULL);
+          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, iface->netmask, NULL);
         }
         return;
       }
