@@ -64,7 +64,7 @@ The protocol is very simple:
 
 ## Usage
 
-When the server receives an ACK, or a physical disconnect is detected on the network interface it will run the hook script specified with -s on the command line, passing the following arguments:
+When the server receives an ACK, or a physical disconnect is detected on a network interface, the server will run the hook script specified with -s on the command line, passing the following arguments:
 
 When an ACK is received:
 
@@ -108,16 +108,18 @@ When client gets an IP:
 
 1. The string "up"
 2. The receiving interface name
-3. The received IP
-4. The received netmask
-5. The received password
-6. Path to the received SSL certificate (optional)
-7. Path to the received SSL key (optional)
+3. The received VLAN ID (or 0 if no VLAN ID)
+4. The received IP
+5. The received netmask
+6. The received password
+7. Path to the received SSL certificate (optional)
+8. Path to the received SSL key (optional)
 
 When physical connection goes away:
 
 1. The string "down"
 2. The receiving interface name
+3. The previously received VLAN ID (or 0 if no VLAN ID)
 
 # Integrated switches
 

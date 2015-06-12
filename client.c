@@ -45,6 +45,7 @@ int sock; // for receiving and sending ack
 int sock_l2; // for sending initial request
 int received = 0; // how much of current message has been received
 char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
+struct response* last_response = NULL;
 int state = STATE_DISCONNECTED; // track state
 int verbose = 0;
 char* hook_script_path = NULL;
@@ -95,7 +96,7 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
 int send_request(int sock, struct sockaddr_ll* bind_addr) {
   struct request req;
 
-  req.type = htonl(REQUEST_TYPE_GETLEASE);
+  req.type = htons(REQUEST_TYPE_GETLEASE);
   
   return broadcast_packet_layer2(sock_l2, (void*) &req, sizeof(req), bind_addr);
 }
@@ -106,7 +107,7 @@ int send_triple_ack(int sock, struct sockaddr_ll* bind_addr) {
   struct request req;
   int times = 3;
 
-  req.type = htonl(REQUEST_TYPE_ACK);
+  req.type = htons(REQUEST_TYPE_ACK);
 
   while(times--) {
     if(broadcast_layer2(sock, (void*) &req, sizeof(req), CLIENT_PORT, SERVER_PORT, bind_addr) < 0) {
@@ -119,20 +120,21 @@ int send_triple_ack(int sock, struct sockaddr_ll* bind_addr) {
 
 int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   struct in_addr ip_addr;
-  struct in_addr subnet_addr;
   FILE* out;
   size_t written;
   int wrote_cert = 0;
   int wrote_key = 0;
+  char vlan[4];
+  char netmask[3];
 
   ip_addr.s_addr = (unsigned long) resp->lease_ip;
-  subnet_addr.s_addr = (unsigned long) resp->lease_netmask;
 
   if(verbose) {
     syslog(LOG_DEBUG, "Response received:\n");
     syslog(LOG_DEBUG, "  type: %d\n", resp->type);
+    syslog(LOG_DEBUG, "  lease_vlan: %u\n", resp->lease_vlan);
     syslog(LOG_DEBUG, "  lease_ip: %s\n", inet_ntoa(ip_addr));
-    syslog(LOG_DEBUG, "  lease_subnet: %s\n", inet_ntoa(subnet_addr));
+    syslog(LOG_DEBUG, "  lease_subnet: %u\n", resp->lease_netmask);
     syslog(LOG_DEBUG, "  cert size: %d\n", resp->cert_size);
 
   }
@@ -169,10 +171,15 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
     fclose(out);
   }
 
+  last_response = resp;
+
+  snprintf(vlan, 4, "%u", resp->lease_vlan);
+  snprintf(netmask, 3, "%u", resp->lease_netmask);
+
   if(wrote_cert && wrote_key) {
-    run_hook_script(hook_script_path, "up", listen_ifname, inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, ssl_cert_path, ssl_key_path, NULL);
+    run_hook_script(hook_script_path, "up", listen_ifname, vlan, inet_ntoa(ip_addr), netmask, resp->password, ssl_cert_path, ssl_key_path, NULL);
   } else {
-    run_hook_script(hook_script_path, "down", listen_ifname, inet_ntoa(ip_addr), inet_ntoa(subnet_addr), resp->password, NULL);
+    run_hook_script(hook_script_path, "up", listen_ifname, vlan, inet_ntoa(ip_addr), netmask, resp->password, NULL);
   }
 
   return 0;
@@ -211,9 +218,10 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
 
   total_size = sizeof(struct response) + ntohl(resp->cert_size) + ntohl(resp->key_size);
 
-  resp->type = ntohl(resp->type);
+  resp->type = ntohs(resp->type);
+  resp->lease_vlan = ntohs(resp->lease_vlan);
   resp->lease_ip = ntohl(resp->lease_ip);
-  resp->lease_netmask = ntohl(resp->lease_netmask);
+  resp->lease_netmask = ntohs(resp->lease_netmask);
   resp->cert_size = ntohl(resp->cert_size);
   resp->key_size = ntohl(resp->key_size);
 
@@ -264,6 +272,8 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
 
 void physical_ethernet_state_change(char* ifname, int connected) {
 
+  char vlan[4];
+
   // ignore events for other interfaces 
   if(strcmp(ifname, listen_ifname) != 0) {
     return;
@@ -303,7 +313,13 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       state = STATE_DISCONNECTED;
       close_socket(sock);
 
-      run_hook_script(hook_script_path, "down", listen_ifname, NULL);
+      if(last_response) {
+        snprintf(vlan, 4, "%u", last_response->lease_vlan);
+      } else {
+        snprintf(vlan, 4, "0");
+      }
+
+      run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
     }
   }
 

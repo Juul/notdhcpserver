@@ -36,8 +36,9 @@
 
 struct interface {
   char* ifname;
+  int vlan;
   char* ip;
-  char* netmask;
+  int netmask;
   int sock;
   int sock_l2;
   struct sockaddr_in addr;
@@ -122,9 +123,10 @@ int send_response(struct interface* iface) {
   int key_size;
   int ret;
 
-  resp.type = htonl(RESPONSE_TYPE);
+  resp.type = htons(RESPONSE_TYPE);
+  resp.lease_vlan = htons(iface->vlan);
   resp.lease_ip = htonl(inet_addr(iface->ip));
-  resp.lease_netmask = htonl(inet_addr(iface->netmask));
+  resp.lease_netmask = htons(iface->netmask);
   strncpy((char*) &(resp.password), iface->password, PASSWORD_LENGTH + 1);
 
   if(!ssl_cert || !ssl_key) {
@@ -176,6 +178,7 @@ int send_response(struct interface* iface) {
 int handle_incoming(struct interface* iface) {
   struct request req;
   ssize_t ret;
+  char netmask[3];
   socklen_t addrlen = sizeof(iface->addr);
   
   ret = recvfrom(iface->sock, &req, sizeof(req), 0, (struct sockaddr*) &(iface->addr), &addrlen);
@@ -194,7 +197,7 @@ int handle_incoming(struct interface* iface) {
     return 1;
   }
 
-  req.type = ntohl(req.type);
+  req.type = ntohs(req.type);
 
   if(req.type == REQUEST_TYPE_GETLEASE) {
     if(verbose) {
@@ -224,7 +227,8 @@ int handle_incoming(struct interface* iface) {
       printf("%s: Running up hook script\n", iface->ifname);
       fflush(stdout);
     }
-    run_hook_script(hook_script_path, "up", iface->ifname, iface->ip, iface->netmask, iface->password, NULL);
+    snprintf(netmask, 3, "%d", iface->netmask);
+    run_hook_script(hook_script_path, "up", iface->ifname, iface->ip, netmask, iface->password, NULL);
     return 1;
   }
 
@@ -318,7 +322,7 @@ int monitor_interface(struct interface* iface) {
   if(verbose) {
     syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
     syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
-    syslog(LOG_DEBUG, "  client netmask %s\n\n", iface->netmask);
+    syslog(LOG_DEBUG, "  client netmask %u\n\n", iface->netmask);
   }
 
   return 0;
@@ -333,16 +337,40 @@ int parse_arg(char* arg) {
   int netmask_offset;
   int ip_len;
   int netmask_len;
+  int vlan_dot_index = 0;
+  int found_equals = 0;
+  char tmp[4];
+  int len;
 
   iface = new_interface();
 
+  // parsing something like:
+  // eth0.2=10.0.0.1/8
+  // or eth0=192.168.1.2/24
   for(i=0; i < arglen; i++) {
+
+    if(!found_equals && (arg[i] == '.')) {
+      vlan_dot_index = i;
+    }
 
     if(arg[i] == '=') {
       iface->ifname = (char*) malloc(i+1);
       memcpy(iface->ifname, arg, i);
       iface->ifname[i] = '\0';
       ip_offset = i + 1;
+      found_equals = 1;
+      if(vlan_dot_index) {
+        len = i - vlan_dot_index - 1;
+        if((len < 1) || (len > 3)) { // VLAN ID too long
+          iface->vlan = 0;
+        } else {
+          memcpy(tmp, arg + vlan_dot_index + 1, len);
+          tmp[len] = '\0';
+          iface->vlan = atoi(tmp);
+        }
+      } else {
+        iface->vlan = 0;
+      }
     }
     if(arg[i] == '/') {
       if(!iface->ifname) {
@@ -360,9 +388,9 @@ int parse_arg(char* arg) {
         fprintf(stderr, "Netmask must be of the form e.g. /24\n");
         break;
       }
-      iface->netmask = (char*) malloc(netmask_len + 1);
-      memcpy(iface->netmask, arg + netmask_offset, netmask_len);
-      iface->netmask[netmask_len] = '\0';
+      memcpy(tmp, arg + netmask_offset, netmask_len);
+      tmp[netmask_len] = '\0';
+      iface->netmask = atoi(tmp);
 
       break;
     }
@@ -436,6 +464,8 @@ char* load_file(char* path, int size) {
 void physical_ethernet_state_change(char* ifname, int connected) {
   struct interface* iface;
 
+  char netmask[3];
+
   // check if we are monitoring this interface
   iface = interfaces;
   do {
@@ -461,7 +491,8 @@ void physical_ethernet_state_change(char* ifname, int connected) {
           if(verbose) {
             syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
-          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, iface->netmask, NULL);
+          snprintf(netmask, 3, "%d", iface->netmask);
+          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
         }
         return;
       }

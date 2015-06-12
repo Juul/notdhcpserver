@@ -2,13 +2,14 @@
 #define PASSWORD_LENGTH (32)
 
 struct request {
-  uint32_t type;
+  uint16_t type;
 };
 
 struct response {
-  uint32_t type;
+  uint16_t type;
+  uint16_t lease_vlan;
   uint32_t lease_ip;
-  uint32_t lease_netmask;
+  uint16_t lease_netmask;
   uint32_t cert_size;
   uint32_t key_size;
   char password[PASSWORD_LENGTH + 1];
