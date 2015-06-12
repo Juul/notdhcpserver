@@ -28,7 +28,7 @@
 #include "protocol.h"
 #include "phyconnect.h"
 
-#define VERSION "0.2"
+#define VERSION "0.3"
 
 // how often to send request (in seconds)
 #define SEND_REQUEST_EVERY (2)
@@ -136,7 +136,6 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
     syslog(LOG_DEBUG, "  lease_ip: %s\n", inet_ntoa(ip_addr));
     syslog(LOG_DEBUG, "  lease_subnet: %u\n", resp->lease_netmask);
     syslog(LOG_DEBUG, "  cert size: %d\n", resp->cert_size);
-
   }
 
   state = STATE_DONE;

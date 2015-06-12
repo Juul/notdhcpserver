@@ -28,7 +28,7 @@
 #include "protocol.h"
 #include "phyconnect.h"
 
-#define VERSION "0.2"
+#define VERSION "0.3"
 
 #define SELECT_TIMEOUT (2)
 
