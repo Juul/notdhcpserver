@@ -491,8 +491,13 @@ void physical_ethernet_state_change(char* ifname, int connected) {
           if(verbose) {
             syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
-          snprintf(netmask, 3, "%d", iface->netmask);
-          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
+
+          // only run down hook script if state indicates 
+          // that we previously ran the up hook scrip on this interface
+          if(iface->state == STATE_GOT_ACK) {
+            snprintf(netmask, 3, "%d", iface->netmask);
+            run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
+          }
         }
         return;
       }

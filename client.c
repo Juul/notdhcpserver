@@ -312,13 +312,18 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       state = STATE_DISCONNECTED;
       close_socket(sock);
 
-      if(last_response) {
-        snprintf(vlan, 4, "%u", last_response->lease_vlan);
-      } else {
-        snprintf(vlan, 4, "0");
-      }
+      // only run down hook script if state is STATE_DONE
+      // which indiciates that we previously ran up hook script
+      if(state == STATE_DONE) {
 
-      run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
+        if(last_response) {
+          snprintf(vlan, 4, "%u", last_response->lease_vlan);
+        } else {
+          snprintf(vlan, 4, "0");
+        }
+        
+        run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
+      }
     }
   }
 
