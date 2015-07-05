@@ -118,6 +118,40 @@ int send_triple_ack(int sock, struct sockaddr_ll* bind_addr) {
   return 0;
 }
 
+
+// return -1 if password contains illegal characters
+// return 0 otherwise
+int check_password(struct response* resp) {
+
+  if(!resp->password) {
+    return 0;
+  }
+
+  int has_terminator = 0;
+  char c;
+  int i;
+  for(i=0; i < PASSWORD_LENGTH + 1; i++) {
+    c = resp->password[i];
+    if(c == '\0') {
+      has_terminator = 1;
+    }
+    if((c >= 48) || (c <= 57)) { // 0-9
+      continue;
+    } else if((c >= 65) || (c <= 90)) { // upper case A-Z
+      continue;
+    } else if((c >= 97) || (c <= 122)) { // lower case a-z
+      continue;
+    } else {
+      return -1;
+    }
+  }
+  if(has_terminator == 0) {
+    return -1;
+  } else {
+    return 0;
+  }
+}
+
 int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   struct in_addr ip_addr;
   FILE* out;
@@ -128,6 +162,11 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
   char netmask[3];
 
   ip_addr.s_addr = (unsigned long) resp->lease_ip;
+
+  if(check_password(resp) < 0) {
+    syslog(LOG_ERR, "Received invalid password");
+    return -1;
+  }
 
   if(verbose) {
     syslog(LOG_DEBUG, "Response received:\n");

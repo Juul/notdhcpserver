@@ -79,7 +79,7 @@ int seed_prng() {
 // of size (len - 1) to a buffer of size len
 // (assumes that buffer has already been allocated)
 void generate_password(char* buffer, int len) {
-  const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJK";
+  const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   int key;
 
   buffer[--len] = '\0';
