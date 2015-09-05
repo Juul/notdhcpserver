@@ -599,7 +599,7 @@ int main(int argc, char** argv) {
   }         
 
 #ifdef SWLIB
-  has_switch = switch_init();
+  has_switch = switch_init(NULL);
   if(has_switch > 0) { // TODO does this actually give an error on no switch?
     syslog(LOG_DEBUG, "Connected to switch\n");
   } else if(has_switch == 0) {
