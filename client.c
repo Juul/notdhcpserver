@@ -470,8 +470,10 @@ int main(int argc, char** argv) {
   // Open the syslog facility
   openlog("notdhcpclient", log_option, LOG_DAEMON);
 
+  listen_ifname = argv[optind];
+
 #ifdef SWLIB
-  has_switch = switch_init();
+  has_switch = switch_init(listen_ifname);
   if(has_switch > 0) { // TODO does this actually give an error on no switch?
     syslog(LOG_DEBUG, "Connected to switch\n");
   } else if(has_switch == 0) {
@@ -481,8 +483,6 @@ int main(int argc, char** argv) {
     has_switch = 0;
   }
 #endif
-
-  listen_ifname = argv[optind];
 
   if(!has_switch) {
     nlsock = netlink_open_socket();

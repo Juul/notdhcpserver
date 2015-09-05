@@ -30,8 +30,8 @@ struct switch_attr *ports_attr;
 // returns 1 on switch found
 // returns 0 on no switch found
 // return -1 on error
-int switch_init() {
-  swdev = swlib_connect(NULL);
+int switch_init(char* listen_ifname) {
+  swdev = swlib_connect(listen_ifname);
   if(!swdev) {
     return 0;
   }
