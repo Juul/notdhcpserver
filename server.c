@@ -174,6 +174,37 @@ int send_response(struct interface* iface) {
   return ret;
 }
 
+int send_responses() {
+  int ret;
+  struct interface *iface;
+
+  iface = interfaces;
+  do {
+    if(iface->state != STATE_LISTENING) {
+      continue;
+    }
+    
+    ret = send_response(iface);
+    if(ret != 0) {
+      return ret;
+    }
+    
+  } while(iface = iface->next);
+
+  return 0;
+}
+
+// return the first interface with the given vlan id
+struct interface* get_iface_by_vlan(uint16_t vlan) {
+  struct interface* iface = interfaces;
+  do {
+    if(iface->vlan == vlan) {
+      return iface;
+    }
+  } while(iface = iface->next);
+  return NULL;
+}
+
 
 int handle_incoming(struct interface* iface) {
   struct request req;
@@ -206,11 +237,22 @@ int handle_incoming(struct interface* iface) {
     }
     generate_password(iface->password, PASSWORD_LENGTH + 1);
 
-    send_response(iface);
+    send_responses(iface);
     return 1;
   }
 
   if(req.type == REQUEST_TYPE_ACK) {
+    req.vlan = ntohs(req.vlan);
+    iface = get_iface_by_vlan(req.vlan);
+    if(!iface) {
+      syslog(LOG_ERR, "Client ACK did not include VLAN ID");
+      return -1;
+    }
+    if(iface->state == STATE_STOPPED) {
+      syslog(LOG_ERR, "Received ACK on disconnect interface (client is lying!)");
+      return 1;
+    }
+    
     if(iface->state == STATE_GOT_ACK) {
       if(verbose) {
         printf("%s: Received redundant ACK\n", iface->ifname);
@@ -669,7 +711,7 @@ int main(int argc, char** argv) {
     iface = interfaces;
     do {
       if(FD_ISSET(iface->sock, &fdset)) {
-        while(handle_incoming(iface)) {
+        while(handle_incoming(iface) > 0) {
           // nothing here
         }
         

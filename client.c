@@ -102,12 +102,13 @@ int send_request(int sock, struct sockaddr_ll* bind_addr) {
 }
 
 
-int send_triple_ack(int sock, struct sockaddr_ll* bind_addr) {
+int send_triple_ack(int sock, struct sockaddr_ll* bind_addr, uint16_t vlan) {
 
   struct request req;
   int times = 3;
 
   req.type = htons(REQUEST_TYPE_ACK);
+  req.vlan = htons(vlan);
 
   while(times--) {
     if(broadcast_layer2(sock, (void*) &req, sizeof(req), CLIENT_PORT, SERVER_PORT, bind_addr) < 0) {
@@ -273,7 +274,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   if((resp->cert_size == 0) && (resp->key_size == 0)) {
     received = 0;
     receive_complete(sock, resp, NULL, NULL);
-    send_triple_ack(sock_l2, bind_addr_l2);
+    send_triple_ack(sock_l2, bind_addr_l2, resp->lease_vlan);
     return 1;
   }
 
@@ -303,7 +304,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   key[resp->key_size - 1] = '\0';
 
   receive_complete(sock, resp, cert, key);
-  send_triple_ack(sock_l2, bind_addr_l2);
+  send_triple_ack(sock_l2, bind_addr_l2, resp->lease_vlan);
 
   return 1;
 }

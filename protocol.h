@@ -3,6 +3,7 @@
 
 struct request {
   uint16_t type;
+  uint16_t vlan;
 };
 
 struct response {
