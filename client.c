@@ -312,6 +312,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
 void physical_ethernet_state_change(char* ifname, int connected) {
 
   char vlan[4];
+  int new_state;
 
   // ignore events for other interfaces 
   if(strcmp(ifname, listen_ifname) != 0) {
@@ -349,7 +350,6 @@ void physical_ethernet_state_change(char* ifname, int connected) {
 
       syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
 
-      state = STATE_DISCONNECTED;
       close_socket(sock);
 
       // only run down hook script if state is STATE_DONE
@@ -364,6 +364,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
         
         run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
       }
+      state = STATE_DISCONNECTED;
     }
   }
 
