@@ -527,18 +527,17 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       } else { // interface down event
         // if interface was listening then stop listening and run down hook
         if(iface->state != STATE_STOPPED) {
-          if(stop_monitor_interface(iface) < 0) {
-            return;
-          }
           if(verbose) {
             syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
-
           // only run down hook script if state indicates 
           // that we previously ran the up hook scrip on this interface
           if(iface->state == STATE_GOT_ACK) {
             snprintf(netmask, 3, "%d", iface->netmask);
             run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
+          }
+          if(stop_monitor_interface(iface) < 0) {
+            return;
           }
         }
         return;
