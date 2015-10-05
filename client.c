@@ -53,8 +53,44 @@ char* listen_ifname = NULL; // interface name to listen on
 char* ssl_cert_path = NULL; // where to write ssl cert
 char* ssl_key_path = NULL; // where to write ssl key
 int has_switch = 0;
+static void init_signals(void);
 
 // functions declarations below
+
+static void sigexit(int signo) {
+  syslog(LOG_ERR, "Receiving exit signal: %d", signo);
+
+  char vlan[4];
+  // only run down hook script if state is STATE_DONE
+  // which indiciates that we previously ran up hook script
+  if(state == STATE_DONE) {
+
+    if(last_response) {
+      snprintf(vlan, 4, "%u", last_response->lease_vlan);
+    } else {
+      snprintf(vlan, 4, "0");
+    }
+
+    run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
+  }
+}
+
+static void init_signals(void) {
+    struct sigaction sa;
+    sigset_t block_mask;
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
+    sigaction(SIGHUP, &sa, NULL);
+}
 
 int broadcast_packet_layer2(int sock, void* buffer, size_t len, struct sockaddr_ll* bind_addr) {
   int attempts = 3;
@@ -499,6 +535,8 @@ int main(int argc, char** argv) {
     }
   }
   
+  init_signals();
+
   for(;;) {
     FD_ZERO(&fdset);
 

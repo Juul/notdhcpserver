@@ -62,8 +62,44 @@ char* ssl_key_path = NULL;
 char* ssl_key = NULL;
 char* hook_script_path = NULL;
 int has_switch = 0;
+static void init_signals(void);
 
 // functions declarations below
+
+static void sigexit(int signo) {
+  syslog(LOG_ERR, "Receiving exit signal: %d", signo);
+  struct interface *iface;
+  char netmask[3];
+
+  iface = interfaces;
+  do {
+    // only run down hook script if state indicates 
+    // that we previously ran the up hook scrip on this interface
+    if(iface->state == STATE_GOT_ACK) {
+      snprintf(netmask, 3, "%d", iface->netmask);
+      run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
+    }
+    
+  } while(iface = iface->next);
+}
+
+static void init_signals(void) {
+    struct sigaction sa;
+    sigset_t block_mask;
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
+    sigaction(SIGHUP, &sa, NULL);
+}
+
 
 int seed_prng() {
   struct timeval time;
@@ -662,6 +698,8 @@ int main(int argc, char** argv) {
   if(parse_args(argc - optind, argv + optind) < 0) {
     exit(1);
   }
+
+  init_signals();
 
   for(;;) {
 
