@@ -133,8 +133,8 @@ swlib_call(int cmd, int (*call)(struct nl_msg *, void *),
 out:
 	if (cb)
 		nl_cb_put(cb);
-nla_put_failure:
   free(cb);
+nla_put_failure:
 	nlmsg_free(msg);
 	return err;
 }
