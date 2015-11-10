@@ -134,6 +134,7 @@ out:
 	if (cb)
 		nl_cb_put(cb);
 nla_put_failure:
+  free(cb);
 	nlmsg_free(msg);
 	return err;
 }

@@ -79,6 +79,7 @@ int netlink_handle_incoming(int nlsock, void (*callback)(char*, int)) {
     }
     if(len < 0) {
       perror("error receiving netlink data");
+      free(nlheader);
       return -1;
     }
     received += len;
