@@ -173,6 +173,7 @@ int send_response(struct interface* iface) {
       printf("%s: sending response (without ssl certificate)\n", iface->ifname);
       fflush(stdout);
     }
+    syslog(LOG_DEBUG, "%s: sending response (without ssl certificate)\n", iface->ifname);
     return broadcast_layer2(iface->sock_l2, (void*) &resp, sizeof(resp), SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
   }
 
@@ -203,6 +204,7 @@ int send_response(struct interface* iface) {
     printf("%s: sending response (with ssl certificate)\n", iface->ifname);
     fflush(stdout);
   }
+  syslog(LOG_DEBUG, "%s: sending response (with ssl certificate)\n", iface->ifname);
   ret = broadcast_layer2(iface->sock_l2, sendbuf, response_size, SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
 
   free(sendbuf);
@@ -271,6 +273,7 @@ int handle_incoming(struct interface* iface) {
       printf("%s: Received lease request\n", iface->ifname);
       fflush(stdout);
     }
+    syslog(LOG_DEBUG, "%s: Received lease request\n", iface->ifname);
     generate_password(iface->password, PASSWORD_LENGTH + 1);
 
     send_responses(iface);
@@ -294,17 +297,20 @@ int handle_incoming(struct interface* iface) {
         printf("%s: Received redundant ACK\n", iface->ifname);
         fflush(stdout);
       }
+      syslog(LOG_DEBUG, "%s: Received redundant ACK\n", iface->ifname);
       return 1;
     }
     if(verbose) {
       printf("%s: Received ACK\n", iface->ifname);
       fflush(stdout);
     }
+    syslog(LOG_DEBUG, "%s: Received ACK\n", iface->ifname);
     iface->state = STATE_GOT_ACK;
     if(verbose) {
       printf("%s: Running up hook script\n", iface->ifname);
       fflush(stdout);
     }
+    syslog(LOG_DEBUG, "%s: Running up hook script\n", iface->ifname);
     snprintf(netmask, 3, "%d", iface->netmask);
     run_hook_script(hook_script_path, "up", iface->ifname, iface->ip, netmask, iface->password, NULL);
     return 1;
@@ -314,6 +320,7 @@ int handle_incoming(struct interface* iface) {
     printf("%s: Got unknown request type\n", iface->ifname);
     fflush(stdout);
   }
+  syslog(LOG_DEBUG, "%s: Got unknown request type\n", iface->ifname);
   
   return 1;
 }
@@ -466,6 +473,7 @@ int parse_arg(char* arg) {
         fprintf(stderr, "Netmask must be of the form e.g. /24\n");
         break;
       }
+      syslog(LOG_ERR, "Netmask must be of the form e.g. /24\n");
       memcpy(tmp, arg + netmask_offset, netmask_len);
       tmp[netmask_len] = '\0';
       iface->netmask = atoi(tmp);
@@ -476,6 +484,7 @@ int parse_arg(char* arg) {
 
   if(!iface->ifname || !iface->ip || !iface->netmask) {
     fprintf(stderr, "Failed to parse argument: %s\n", arg);
+    syslog(LOG_ERR, "Failed to parse argument: %s\n", arg);
     return -1;
   }
 
@@ -534,6 +543,7 @@ char* load_file(char* path, int size) {
   if(verbose) {
     printf("Loaded SSL certificate from %s\n", path);
   }
+  syslog(LOG_DEBUG, "Loaded SSL certificate from %s\n", path);
 
   return buf;
 }
@@ -555,6 +565,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
             printf("%s: Physical connection detected\n", ifname);
             fflush(stdout);
           }
+          syslog(LOG_DEBUG, "%s: Physical disconnect detected\n", ifname);
           if(monitor_interface(iface) < 0) {
             return;
           }
@@ -732,6 +743,7 @@ int main(int argc, char** argv) {
     if((num_ready = select(max_fd + 1, &fdset, NULL, NULL, &timeout)) < 0) {
       if(errno == EINTR) {
         printf("EINTR\n"); // TODO remove
+        syslog(LOG_DEBUG, "EINTR\n");
         continue;
       }
       syslog(LOG_ERR, "error during select");
