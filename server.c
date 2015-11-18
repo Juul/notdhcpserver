@@ -405,10 +405,13 @@ int monitor_interface(struct interface* iface) {
   iface->state = STATE_LISTENING;
 
   if(verbose) {
-    syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
-    syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
-    syslog(LOG_DEBUG, "  client netmask %u\n\n", iface->netmask);
+    printf("Listening on interface %s:\n", iface->ifname);
+    printf("  client IP: %s\n", iface->ip);
+    printf("  client netmask %u\n\n", iface->netmask);
   }
+  syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
+  syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
+  syslog(LOG_DEBUG, "  client netmask %u\n\n", iface->netmask);
 
   return 0;
 }
@@ -471,9 +474,9 @@ int parse_arg(char* arg) {
       netmask_len = strlen(arg) - netmask_offset;
       if(netmask_len > 2) {
         fprintf(stderr, "Netmask must be of the form e.g. /24\n");
+        syslog(LOG_ERR, "Netmask must be of the form e.g. /24\n");
         break;
       }
-      syslog(LOG_ERR, "Netmask must be of the form e.g. /24\n");
       memcpy(tmp, arg + netmask_offset, netmask_len);
       tmp[netmask_len] = '\0';
       iface->netmask = atoi(tmp);
@@ -575,6 +578,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
         // if interface was listening then stop listening and run down hook
         if(iface->state != STATE_STOPPED) {
           if(verbose) {
+            printf("%s: Physical disconnect detected\n", ifname);
             syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
           // only run down hook script if state indicates 
