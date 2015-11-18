@@ -85,32 +85,36 @@ int switch_ifname_link_status(char* ifname) {
 // This is because 0 is the CPU port for which status is irrelevant.
 // Return value same as switch_port_link_status
 int switch_vlan_link_status(int vlan_id) {
-
-	struct switch_val val;
+  struct switch_val val;
   int port;
   int i;
-  
+  int ret = -1;
+
   val.port_vlan = vlan_id;
 
-  if(swlib_get_attr(swdev, ports_attr, &val) < 0) {
+  if (swlib_get_attr(swdev, ports_attr, &val) < 0) {
     return -1;
   }
 
   for(i = 0; i < val.len; i++) {
     port = val.value.ports[i].id;
-    if(port != 0) {
-      return switch_port_link_status(port);
+    if (port != 0) {
+      ret = switch_port_link_status(port);
+      break;
     }
   }
-  
-  return -1;
+
+  /* swlib dynamically allocates value.ports for us if it's passed a NULL */
+  free(val.value.ports);
+
+  return ret;
 }
 
 // Takes the switch port number as argument
 // Returns 0 on link down and 1 on link up
 int switch_port_link_status(int port) {
 
-	struct switch_val val;
+  struct switch_val val;
   char* ret;
   
   val.port_vlan = port;
