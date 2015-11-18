@@ -120,6 +120,13 @@ int switch_port_link_status(int port) {
   }
 
   ret = strstr(val.value.s, "link:up");
+
+  /*
+   * "When getting string attributes, val->value.s must be freed by the caller"
+   * (see swlib/swlib.h)
+   */
+  free(val.value.s);
+
   if(ret) {
     return 1;
   }
