@@ -42,6 +42,7 @@
 struct sockaddr_in bind_addr;
 struct sockaddr_ll bind_addr_l2;
 int sock; // for receiving and sending ack
+int vlan_sock; // for receiving and sending ack
 int sock_l2; // for sending initial request
 int received = 0; // how much of current message has been received
 char recvbuf[MAX_RESPONSE_SIZE]; // the extra two bytes are to null-terminate 
@@ -54,6 +55,11 @@ char* ssl_cert_path = NULL; // where to write ssl cert
 char* ssl_key_path = NULL; // where to write ssl key
 int has_switch = 0;
 static void init_signals(void);
+time_t time_passed = 0; // Amount of time passed since last heartbeat ACKed
+time_t last_contact; // Last contact with server
+time_t timeout_length = 0; // Amount of time until timeout (0 for no timeouts)
+time_t heartbeat_period = 0; // Amount of time between heartbeats (0 for no heartbeats)
+char vlan_ifname[10];
 
 // functions declarations below
 
@@ -71,13 +77,25 @@ static void sigexit(int signo) {
       snprintf(vlan, 4, "0");
     }
 
+    close_socket(vlan_sock);
     run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
   }
+  close_socket(sock);
+  close_socket(sock_l2);
+
+  signal(signo, SIG_DFL);
+  kill(getpid(), signo);
 }
 
 static void init_signals(void) {
     struct sigaction sa;
     sigset_t block_mask;
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
 
     sigemptyset(&block_mask);
     sa.sa_handler = sigexit;
@@ -128,6 +146,17 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   return 0;
 }
 
+int send_heartbeat(int sock, struct sockaddr_ll* bind_addr) {
+  struct request req;
+
+  if(last_response) {
+    req.type = htons(REQUEST_TYPE_HEARTBEAT);
+    req.vlan = htons(last_response->lease_vlan);
+    return broadcast_packet(vlan_sock, (void*) &req, sizeof(req));
+  } else {
+    return -1;
+  }
+}
 
 int send_request(int sock, struct sockaddr_ll* bind_addr) {
   struct request req;
@@ -136,7 +165,6 @@ int send_request(int sock, struct sockaddr_ll* bind_addr) {
   
   return broadcast_packet_layer2(sock_l2, (void*) &req, sizeof(req), bind_addr);
 }
-
 
 int send_triple_ack(int sock, struct sockaddr_ll* bind_addr, uint16_t vlan) {
 
@@ -214,8 +242,6 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
     syslog(LOG_DEBUG, "  cert size: %d\n", resp->cert_size);
   }
 
-  state = STATE_DONE;
-
   // write ssl cert
   if(ssl_cert_path && cert) {
     out = fopen(ssl_cert_path, "w+");
@@ -257,6 +283,48 @@ int receive_complete(int sock, struct response* resp, char* cert, char* key) {
     run_hook_script(hook_script_path, "up", listen_ifname, vlan, inet_ntoa(ip_addr), netmask, resp->password, NULL);
   }
 
+  if (heartbeat_period) {
+
+    last_contact = time(NULL);
+    time_passed = 0;
+
+    if (sizeof(vlan_ifname) < strlen(listen_ifname) + 1) {
+      if (verbose) {
+        fprintf(stderr, "%s is too large to copy into vlan_ifname", listen_ifname);
+      }
+      syslog(LOG_ERR, "%s is too large to copy into vlan_ifname", listen_ifname);
+      return -1;
+    }
+    strncpy(vlan_ifname, listen_ifname, sizeof(vlan_ifname));
+
+    if (sizeof(vlan_ifname) < strlen(vlan_ifname) + strlen(vlan) + 2) { // +1 for null and +1 for "."
+      if (verbose) {
+        fprintf(stderr, "cannot cat \".%s\" into vlan_ifname which is currently: %s", vlan, vlan_ifname);
+      }
+      syslog(LOG_ERR, "cannot cat \".%s\" into vlan_ifname which is currently: %s", vlan, vlan_ifname);
+      return -1;
+    }
+    strncat(vlan_ifname, ".", sizeof(vlan_ifname));
+    strncat(vlan_ifname, vlan, sizeof(vlan_ifname));
+
+    // want to listen on vlan interface now
+    vlan_sock = open_socket(vlan_ifname, &bind_addr, CLIENT_PORT);
+
+    if(vlan_sock < 0) {
+      syslog(LOG_ERR, "Fatal error: Could not open socket on vlan interface: %s\n", vlan_ifname);
+
+      signal(SIGQUIT, SIG_DFL);
+      kill(getpid(), SIGQUIT);
+    }
+
+    if(verbose) {
+      syslog(LOG_DEBUG, "Layer 3 socket opened on %s\n", vlan_ifname);
+      fflush(stdout);
+    }
+  }
+
+  state = STATE_DONE;
+
   return 0;
 }
 
@@ -280,7 +348,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
 
   // If we're not in the connected state we probably already got a response
   // and we're just receiving junk now, so just ignore it.
-  if(state != STATE_CONNECTED) {
+  if(state == STATE_DISCONNECTED) {
     return 1;
   }
 
@@ -294,6 +362,13 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   total_size = sizeof(struct response) + ntohl(resp->cert_size) + ntohl(resp->key_size);
 
   resp->type = ntohs(resp->type);
+
+  if(state == STATE_DONE && resp->type == RESPONSE_TYPE_ACK) {
+    time_passed = 0;
+    received = 0; // reset received counter, ready for next message
+    return 1;
+  }
+
   resp->lease_vlan = ntohs(resp->lease_vlan);
   resp->lease_ip = ntohl(resp->lease_ip);
   resp->lease_netmask = ntohs(resp->lease_netmask);
@@ -342,7 +417,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
   receive_complete(sock, resp, cert, key);
   send_triple_ack(sock_l2, bind_addr_l2, resp->lease_vlan);
 
-  return 1;
+  return 0;
 }
 
 void physical_ethernet_state_change(char* ifname, int connected) {
@@ -391,6 +466,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
       // only run down hook script if state is STATE_DONE
       // which indiciates that we previously ran up hook script
       if(state == STATE_DONE) {
+        close_socket(vlan_sock);
 
         if(last_response) {
           snprintf(vlan, 4, "%u", last_response->lease_vlan);
@@ -425,6 +501,8 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Where to write SSL cert\n");
   fprintf(out, "  -k ssl_key: Where to write SSL key\n");
+  fprintf(out, "  -t timeout_length: Amount of time in seconds before timeout\n");
+  fprintf(out, "  -h heartbeat_period: Amount of time in seconds before timeout\n");
   fprintf(out, "  -v: Enable verbose mode\n");
   fprintf(out, "  -h: This help text\n");
   fprintf(out, "\n");
@@ -464,8 +542,11 @@ int main(int argc, char** argv) {
   int max_fd;
   struct timeval timeout;
   time_t last_request = 0;
+  time_t last_heartbeat = 0;
   int c;
   int log_option = LOG_PERROR;
+  time_t time_diff;
+  char vlan[4];
 
   state = STATE_DISCONNECTED;
   
@@ -474,7 +555,7 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "s:c:k:fvh")) != -1) {
+  while((c = getopt(argc, argv, "s:c:k:t:r:fvh")) != -1) {
     switch (c) {
     case 's':
       hook_script_path = optarg;
@@ -487,6 +568,12 @@ int main(int argc, char** argv) {
       break;
     case 'k':
       ssl_key_path = optarg;
+      break;
+    case 't':
+      timeout_length = atoi(optarg);
+      break;
+    case 'r':
+      heartbeat_period = atoi(optarg);
       break;
     case 'v': 
       printf("Verbose mode enabled\n");
@@ -544,13 +631,21 @@ int main(int argc, char** argv) {
       FD_SET(nlsock, &fdset);
     }
 
-    if(state == STATE_CONNECTED) {
+    if(state == STATE_CONNECTED) { 
       FD_SET(sock, &fdset);
 
       if(nlsock > sock) {
         max_fd = nlsock;
       } else {
         max_fd = sock;
+      }
+    } else if (state == STATE_DONE) {
+      FD_SET(vlan_sock, &fdset);
+
+      if(nlsock > vlan_sock) {
+        max_fd = nlsock;
+      } else {
+        max_fd = vlan_sock;
       }
     } else {
       max_fd = nlsock;
@@ -566,9 +661,17 @@ int main(int argc, char** argv) {
       syslog(LOG_ERR, "error during select");
     }
 
-    if(FD_ISSET(sock, &fdset)) {
-      while(handle_incoming(sock, sock_l2, &bind_addr_l2)) {
-        // nothing here
+    if(state == STATE_CONNECTED) { 
+      if(FD_ISSET(sock, &fdset)) {
+        while(handle_incoming(sock, sock_l2, &bind_addr_l2)) {
+          // nothing here
+        }
+      }
+    } else if (state == STATE_DONE) {
+      if(FD_ISSET(vlan_sock, &fdset)) {
+        while(handle_incoming(vlan_sock, sock_l2, &bind_addr_l2)) {
+          // nothing here
+        }
       }
     }
 
@@ -580,13 +683,42 @@ int main(int argc, char** argv) {
       check_switch_link();
     }
 
+    if((heartbeat_period) && (state == STATE_DONE) && (time(NULL) - last_heartbeat >= heartbeat_period)) {
+      send_heartbeat(sock_l2, &bind_addr_l2);
+      last_heartbeat = time(NULL);
+    }
+
     if((state == STATE_CONNECTED) && (time(NULL) - last_request >= SEND_REQUEST_EVERY)) {
       syslog(LOG_DEBUG, "Sending request\n");
       send_request(sock_l2, &bind_addr_l2);
       last_request = time(NULL);
     }
-  }
 
+    if (state == STATE_DONE) {
+      time_diff = difftime(time(NULL), last_contact);
+      time_passed = time_diff + time_passed;
+      if (timeout_length && time_passed > timeout_length) {
+        if(verbose) {
+          printf("%s: Connection timed out.\n", listen_ifname);
+          fflush(stdout);
+        }
+        syslog(LOG_DEBUG, "%s: Connection timed out.\n", listen_ifname);
+
+        if(last_response) {
+          snprintf(vlan, 4, "%u", last_response->lease_vlan);
+        } else {
+          snprintf(vlan, 4, "0");
+        }
+
+        state = STATE_CONNECTED;
+
+        run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
+
+      } else {
+        last_contact = time(NULL);
+      }
+    }
+  }
   
   return 0;
 }

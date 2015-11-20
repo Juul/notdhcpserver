@@ -46,7 +46,7 @@ struct interface {
   char password[PASSWORD_LENGTH + 1];
   int state;
   time_t time_passed;
-  time_t last_time;
+  time_t last_contact;
   struct interface* next;
 };
 
@@ -65,6 +65,7 @@ char* ssl_key = NULL;
 char* hook_script_path = NULL;
 int has_switch = 0;
 static void init_signals(void);
+time_t timeout_length = 0; // Amount of time until timeout (0 for no timeouts)
 
 // functions declarations below
 
@@ -83,11 +84,20 @@ static void sigexit(int signo) {
     }
     
   } while(iface = iface->next);
+
+  signal(signo, SIG_DFL);
+  kill(getpid(), signo);
 }
 
 static void init_signals(void) {
     struct sigaction sa;
     sigset_t block_mask;
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
 
     sigemptyset(&block_mask);
     sa.sa_handler = sigexit;
@@ -174,7 +184,7 @@ int send_ack(struct interface* iface) {
   }
 
   syslog(LOG_DEBUG, "%s: sending ACK.\n", iface->ifname);
-  return broadcast_layer2(iface->sock_l2, (void*) &resp, sizeof(resp), SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
+  return broadcast_packet(iface->sock, (void*) &resp, sizeof(resp));
 }
 
 int send_response(struct interface* iface) {
@@ -334,7 +344,7 @@ int handle_incoming(struct interface* iface) {
     iface->state = STATE_GOT_ACK;
 
     iface->time_passed = 0;
-    iface->last_time = time();
+    iface->last_contact = time(NULL);
 
     if(verbose) {
       printf("%s: Running up hook script\n", iface->ifname);
@@ -347,18 +357,20 @@ int handle_incoming(struct interface* iface) {
   }
 
   if(req.type == REQUEST_TYPE_HEARTBEAT) {
-    if(verbose) {
-      printf("%s: Received heartbeat request\n", iface->ifname);
-      fflush(stdout);
-    }
-    syslog(LOG_DEBUG, "%s: Received heartbeat request\n", iface->ifname);
 
-    req.vlan = ntohs(req.vlan);
     iface = get_iface_by_vlan(req.vlan);
     if(!iface) {
       syslog(LOG_ERR, "Client HEARTBEAT did not include VLAN ID");
       return -1;
     }
+
+    if(verbose) {
+      printf("%s: Received heartbeat request\n", iface->ifname);
+      fflush(stdout);
+    }
+
+    req.vlan = ntohs(req.vlan);
+
     if(iface->state == STATE_STOPPED) {
       syslog(LOG_ERR, "Received HEARTBEAT on disconnect interface (client is lying!)");
       return -1;
@@ -373,18 +385,7 @@ int handle_incoming(struct interface* iface) {
       return -1;
     }
 
-    if(verbose) {
-      printf("%s: Setting time_passed back to 0.\n", iface->ifname);
-      fflush(stdout);
-    }
-    syslog(LOG_DEBUG, "%s: Setting time_passed back to 0.\n", iface->ifname);
     iface->time_passed = 0;
-
-    if(verbose) {
-      printf("%s: Sending HEARTBEAT ACK.\n", iface->ifname);
-      fflush(stdout);
-    }
-    syslog(LOG_DEBUG, "%s: Sending HEARTBEAT ACK.\n", iface->ifname);
 
     return send_ack(iface);
   }
@@ -417,6 +418,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
+  fprintf(out, "  -t timeout_length: Amount of time in seconds before timeout\n");
   fprintf(out, "  -v: Enable verbose mode\n");
   fprintf(out, "  -h: This help text\n");
   fprintf(out, "\n");
@@ -478,10 +480,13 @@ int monitor_interface(struct interface* iface) {
   iface->state = STATE_LISTENING;
 
   if(verbose) {
-    syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
-    syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
-    syslog(LOG_DEBUG, "  client netmask %u\n\n", iface->netmask);
+    printf("Listening on interface %s:\n", iface->ifname);
+    printf("  client IP: %s\n", iface->ip);
+    printf("  client netmask %u\n\n", iface->netmask);
   }
+  syslog(LOG_DEBUG, "Listening on interface %s:\n", iface->ifname);
+  syslog(LOG_DEBUG, "  client IP: %s\n", iface->ip);
+  syslog(LOG_DEBUG, "  client netmask %u\n\n", iface->netmask);
 
   return 0;
 }
@@ -544,9 +549,9 @@ int parse_arg(char* arg) {
       netmask_len = strlen(arg) - netmask_offset;
       if(netmask_len > 2) {
         fprintf(stderr, "Netmask must be of the form e.g. /24\n");
+        syslog(LOG_ERR, "Netmask must be of the form e.g. /24\n");
         break;
       }
-      syslog(LOG_ERR, "Netmask must be of the form e.g. /24\n");
       memcpy(tmp, arg + netmask_offset, netmask_len);
       tmp[netmask_len] = '\0';
       iface->netmask = atoi(tmp);
@@ -648,6 +653,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
         // if interface was listening then stop listening and run down hook
         if(iface->state != STATE_STOPPED) {
           if(verbose) {
+            printf("%s: Physical disconnect detected\n", ifname);
             syslog(LOG_WARNING, "%s: Physical disconnect detected\n", ifname);
           }
           // only run down hook script if state indicates 
@@ -709,7 +715,7 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:k:s:vfh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:t:vfh")) != -1) {
     switch (c) {
     case 's':
       hook_script_path = optarg;
@@ -730,6 +736,9 @@ int main(int argc, char** argv) {
       if(!ssl_key) {
         exit(1);
       }
+      break;
+    case 't':
+      timeout_length = atoi(optarg);
       break;
     case 'v': 
       printf("Verbose mode enabled\n");
@@ -796,7 +805,7 @@ int main(int argc, char** argv) {
     iface = interfaces;
     do {
       // skip ifaces that already got an ACK
-      if(iface->state != STATE_LISTENING) {
+      if(iface->state != STATE_LISTENING && iface->state != STATE_GOT_ACK) {
         continue;
       }
       FD_SET(iface->sock, &fdset);
@@ -835,14 +844,14 @@ int main(int argc, char** argv) {
     iface = interfaces;
     do {
       if (iface->state == STATE_GOT_ACK) {
-        time_diff = difftime(time(), iface->last_time);
+        time_diff = difftime(time(NULL), iface->last_contact);
         iface->time_passed = time_diff + iface->time_passed;
-        if (iface->time_passed > TIMEOUT_LENGTH) {
+        if (timeout_length && iface->time_passed > timeout_length) {
           if(verbose) {
             printf("%s: Connection timed out.\n", iface->ifname);
             fflush(stdout);
           }
-          syslog(LOG_DEBUG, "%s: Connection timed out.\n", ifname);
+          syslog(LOG_DEBUG, "%s: Connection timed out.\n", iface->ifname);
 
           if(verbose) {
             printf("%s: Running down hook script\n", iface->ifname);
@@ -852,8 +861,11 @@ int main(int argc, char** argv) {
 
           snprintf(netmask, 3, "%d", iface->netmask);
 
-          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
           iface->state = STATE_LISTENING;
+
+          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
+        } else {
+          iface->last_contact = time(NULL);
         }
       }
       
