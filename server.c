@@ -45,6 +45,8 @@ struct interface {
   struct sockaddr_ll addr_l2;
   char password[PASSWORD_LENGTH + 1];
   int state;
+  time_t time_passed;
+  time_t last_time;
   struct interface* next;
 };
 
@@ -151,6 +153,30 @@ int broadcast_packet(int sock, void* buffer, size_t len) {
   return 0;
 }
 
+int send_ack(struct interface* iface) {
+  struct response resp;
+  void* sendbuf;
+  int response_size;
+  int ret;
+
+  resp.type = htons(RESPONSE_TYPE_ACK);
+  resp.lease_vlan = htons(iface->vlan);
+  resp.lease_ip = htonl(inet_addr(iface->ip));
+  resp.lease_netmask = htons(iface->netmask);
+  strncpy((char*) &(resp.password), iface->password, PASSWORD_LENGTH + 1);
+
+  resp.cert_size = 0;
+  resp.key_size = 0;
+
+  if(verbose) {
+    printf("%s: sending ACK.\n", iface->ifname);
+    fflush(stdout);
+  }
+
+  syslog(LOG_DEBUG, "%s: sending ACK.\n", iface->ifname);
+  return broadcast_layer2(iface->sock_l2, (void*) &resp, sizeof(resp), SERVER_PORT, CLIENT_PORT, &(iface->addr_l2));
+}
+
 int send_response(struct interface* iface) {
   struct response resp;
   void* sendbuf;
@@ -218,7 +244,7 @@ int send_responses() {
 
   iface = interfaces;
   do {
-    if(iface->state != STATE_LISTENING) {
+    if(iface->state == STATE_STOPPED) {
       continue;
     }
     
@@ -306,6 +332,10 @@ int handle_incoming(struct interface* iface) {
     }
     syslog(LOG_DEBUG, "%s: Received ACK\n", iface->ifname);
     iface->state = STATE_GOT_ACK;
+
+    iface->time_passed = 0;
+    iface->last_time = time();
+
     if(verbose) {
       printf("%s: Running up hook script\n", iface->ifname);
       fflush(stdout);
@@ -316,6 +346,49 @@ int handle_incoming(struct interface* iface) {
     return 1;
   }
 
+  if(req.type == REQUEST_TYPE_HEARTBEAT) {
+    if(verbose) {
+      printf("%s: Received heartbeat request\n", iface->ifname);
+      fflush(stdout);
+    }
+    syslog(LOG_DEBUG, "%s: Received heartbeat request\n", iface->ifname);
+
+    req.vlan = ntohs(req.vlan);
+    iface = get_iface_by_vlan(req.vlan);
+    if(!iface) {
+      syslog(LOG_ERR, "Client HEARTBEAT did not include VLAN ID");
+      return -1;
+    }
+    if(iface->state == STATE_STOPPED) {
+      syslog(LOG_ERR, "Received HEARTBEAT on disconnect interface (client is lying!)");
+      return -1;
+    }
+ 
+    if(iface->state != STATE_GOT_ACK) {
+      if(verbose) {
+        printf("%s: Recieved HEARTBEAT for interface that hadn't been ACKed.\n", iface->ifname);
+        fflush(stdout);
+      }
+      syslog(LOG_DEBUG, "%s: Recieved HEARTBEAT for interface that hadn't been ACKed.\n", iface->ifname);
+      return -1;
+    }
+
+    if(verbose) {
+      printf("%s: Setting time_passed back to 0.\n", iface->ifname);
+      fflush(stdout);
+    }
+    syslog(LOG_DEBUG, "%s: Setting time_passed back to 0.\n", iface->ifname);
+    iface->time_passed = 0;
+
+    if(verbose) {
+      printf("%s: Sending HEARTBEAT ACK.\n", iface->ifname);
+      fflush(stdout);
+    }
+    syslog(LOG_DEBUG, "%s: Sending HEARTBEAT ACK.\n", iface->ifname);
+
+    return send_ack(iface);
+  }
+   
   if(verbose) {
     printf("%s: Got unknown request type\n", iface->ifname);
     fflush(stdout);
@@ -628,6 +701,8 @@ int main(int argc, char** argv) {
   struct interface* iface;
   int c;
   int log_option = LOG_PERROR;
+  time_t time_diff;
+  char netmask[3];
 
   if(argc <= 0) {
     usagefail(NULL);
@@ -759,6 +834,29 @@ int main(int argc, char** argv) {
 
     iface = interfaces;
     do {
+      if (iface->state == STATE_GOT_ACK) {
+        time_diff = difftime(time(), iface->last_time);
+        iface->time_passed = time_diff + iface->time_passed;
+        if (iface->time_passed > TIMEOUT_LENGTH) {
+          if(verbose) {
+            printf("%s: Connection timed out.\n", iface->ifname);
+            fflush(stdout);
+          }
+          syslog(LOG_DEBUG, "%s: Connection timed out.\n", ifname);
+
+          if(verbose) {
+            printf("%s: Running down hook script\n", iface->ifname);
+            fflush(stdout);
+          }
+          syslog(LOG_DEBUG, "%s: Running down hook script\n", iface->ifname);
+
+          snprintf(netmask, 3, "%d", iface->netmask);
+
+          run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
+          iface->state = STATE_LISTENING;
+        }
+      }
+      
       if(FD_ISSET(iface->sock, &fdset)) {
         while(handle_incoming(iface) > 0) {
           // nothing here

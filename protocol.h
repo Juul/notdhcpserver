@@ -22,6 +22,13 @@ struct response {
 #define REQUEST_TYPE_GETLEASE (42)
 #define RESPONSE_TYPE (43)
 #define REQUEST_TYPE_ACK (44)
+#define REQUEST_TYPE_HEARTBEAT (45)
+
+// how long before timeout (in sec)
+#define TIMEOUT_LENGTH (30)
+
+// heartbeat period
+#define HEARTBEAT_PERIOD (5)
 
 // how big is an ssl cert allowed to be (in bytes)
 #define MAX_CERT_SIZE (16384)
