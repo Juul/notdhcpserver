@@ -80,6 +80,7 @@ static void sigexit(int signo) {
     close_socket(vlan_sock);
     run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
   }
+
   close_socket(sock);
   close_socket(sock_l2);
 
