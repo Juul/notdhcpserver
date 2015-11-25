@@ -83,6 +83,12 @@ static void init_signals(void) {
     sa.sa_handler = sigexit;
     sa.sa_mask = block_mask;
     sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+
+    sigemptyset(&block_mask);
+    sa.sa_handler = sigexit;
+    sa.sa_mask = block_mask;
+    sa.sa_flags = 0;
     sigaction(SIGTERM, &sa, NULL);
 
     sigemptyset(&block_mask);
