@@ -178,12 +178,6 @@ int send_ack(struct interface* iface) {
   resp.cert_size = 0;
   resp.key_size = 0;
 
-  if(verbose) {
-    printf("%s: sending ACK.\n", iface->ifname);
-    fflush(stdout);
-  }
-
-  syslog(LOG_DEBUG, "%s: sending ACK.\n", iface->ifname);
   return broadcast_packet(iface->sock, (void*) &resp, sizeof(resp));
 }
 
