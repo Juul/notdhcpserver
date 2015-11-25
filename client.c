@@ -73,6 +73,9 @@ static void sigexit(int signo) {
 
     run_hook_script(hook_script_path, "down", listen_ifname, vlan, NULL);
   }
+
+  signal(signo, SIG_DFL);
+  kill(getpid(), signo);
 }
 
 static void init_signals(void) {

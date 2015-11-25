@@ -81,6 +81,9 @@ static void sigexit(int signo) {
     }
     
   } while(iface = iface->next);
+
+  signal(signo, SIG_DFL);
+  kill(getpid(), signo);
 }
 
 static void init_signals(void) {
