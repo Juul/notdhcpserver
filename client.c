@@ -503,7 +503,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "  -c ssl_cert: Where to write SSL cert\n");
   fprintf(out, "  -k ssl_key: Where to write SSL key\n");
   fprintf(out, "  -t timeout_length: Amount of time in seconds before timeout\n");
-  fprintf(out, "  -h heartbeat_period: Amount of time in seconds before timeout\n");
+  fprintf(out, "  -r heartbeat_period: Amount of time in seconds before timeout\n");
   fprintf(out, "  -v: Enable verbose mode\n");
   fprintf(out, "  -h: This help text\n");
   fprintf(out, "\n");
