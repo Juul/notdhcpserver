@@ -285,6 +285,8 @@ int handle_incoming(struct interface* iface) {
     if((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
       return 0;
     }
+    syslog(LOG_ERR, "error receiving packet. errno: %d", errno);
+    return 1;
   }
 
   // didn't receive a full request, so just wait for next one to arrive

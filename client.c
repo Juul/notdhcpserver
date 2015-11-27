@@ -342,7 +342,7 @@ int handle_incoming(int sock, int sock_l2, struct sockaddr_ll* bind_addr_l2) {
     if((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
       return 0;
     }
-    syslog(LOG_ERR, "error receiving packet 1");
+    syslog(LOG_ERR, "error receiving packet. errno: %d", errno);
     return 1;
   }  
   received += ret;
