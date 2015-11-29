@@ -640,7 +640,7 @@ int main(int argc, char** argv) {
       } else {
         max_fd = sock;
       }
-    } else if (state == STATE_DONE) {
+    } else if (state == STATE_DONE && heartbeat_period) {
       FD_SET(vlan_sock, &fdset);
 
       if(nlsock > vlan_sock) {
@@ -668,7 +668,7 @@ int main(int argc, char** argv) {
           // nothing here
         }
       }
-    } else if (state == STATE_DONE) {
+    } else if (state == STATE_DONE && heartbeat_period) {
       if(FD_ISSET(vlan_sock, &fdset)) {
         while(handle_incoming(vlan_sock, sock_l2, &bind_addr_l2)) {
           // nothing here
