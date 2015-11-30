@@ -248,7 +248,7 @@ int send_responses() {
 
   iface = interfaces;
   do {
-    if(iface->state == STATE_STOPPED) {
+    if(iface->state != STATE_LISTENING) {
       continue;
     }
     
