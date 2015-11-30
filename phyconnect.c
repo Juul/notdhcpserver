@@ -1,4 +1,5 @@
 
+#include <syslog.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -111,7 +112,11 @@ int netlink_handle_incoming(int nlsock, void (*callback)(char*, int)) {
 
     if(ifname && got_operstate && callback) {
       printf("operstate for %s: %u\n", ifname, *operstate);
-      if(*operstate == 6) {
+      syslog(LOG_DEBUG, "operstate for %s: %u\n", ifname, *operstate);
+      // From link above: Interface is in unknown state, neither driver nor userspace has set
+      // operational state. Interface must be considered for user data as
+      // setting operational state has not been implemented in every driver.
+      if(*operstate == 6 || *operstate == 0) {
         callback(ifname, 1);
       } else {
         callback(ifname, 0);
