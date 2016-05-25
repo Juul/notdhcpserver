@@ -248,12 +248,13 @@ int send_responses() {
 
   iface = interfaces;
   do {
+    //    printf("iface %s is in state %d\n", iface->ifname, iface->state);
     if(iface->state != STATE_LISTENING) {
       continue;
     }
     
     ret = send_response(iface);
-    if(ret != 0) {
+    if(ret < 0) {
       return ret;
     }
     
@@ -308,7 +309,7 @@ int handle_incoming(struct interface* iface) {
     syslog(LOG_DEBUG, "%s: Received lease request\n", iface->ifname);
     generate_password(iface->password, PASSWORD_LENGTH + 1);
 
-    send_responses(iface);
+    send_responses();
     return 1;
   }
 
