@@ -23,6 +23,9 @@
 #include "switch.h"
 #endif
 
+#include <libubox/blobmsg_json.h>
+#include <libubus.h>
+
 #include "crc32.h"
 #include "common.h"
 #include "protocol.h"
@@ -692,6 +695,127 @@ void check_switch_links() {
 #endif
 }
 
+
+// BEGIN UBUS STUFF
+
+static struct ubus_context *ctx;
+static struct blob_buf b;
+
+enum {
+	FOO_ID,
+	FOO_MSG,
+	__FOO_MAX
+};
+
+static const struct blobmsg_policy ubus_foo_policy[] = {
+	[FOO_ID] = { .name = "id", .type = BLOBMSG_TYPE_INT32 },
+	[FOO_MSG] = { .name = "msg", .type = BLOBMSG_TYPE_STRING },
+};
+
+struct ubus_foo_request {
+	struct ubus_request_data req;
+	struct uloop_timeout timeout;
+	int fd;
+	int idx;
+	char data[];
+};
+
+static void ubus_method_foo_fd_reply(struct uloop_timeout *t)
+{
+	struct ubus_foo_request *req = container_of(t, struct ubus_foo_request, timeout);
+	char *data;
+
+	data = alloca(strlen(req->data) + 32);
+	sprintf(data, "msg%d: %s\n", ++req->idx, req->data);
+	if (write(req->fd, data, strlen(data)) < 0) {
+		close(req->fd);
+		free(req);
+		return;
+	}
+
+	uloop_timeout_set(&req->timeout, 1000);
+}
+
+static void ubus_method_foo_reply(struct uloop_timeout *t)
+{
+	struct ubus_foo_request *req = container_of(t, struct ubus_foo_request, timeout);
+	int fds[2];
+
+	blob_buf_init(&b, 0);
+	blobmsg_add_string(&b, "message", req->data);
+	ubus_send_reply(ctx, &req->req, b.head);
+
+	if (pipe(fds) == -1) {
+		fprintf(stderr, "Failed to create pipe\n");
+		return;
+	}
+	ubus_request_set_fd(ctx, &req->req, fds[0]);
+	ubus_complete_deferred_request(ctx, &req->req, 0);
+	req->fd = fds[1];
+
+	req->timeout.cb = ubus_method_foo_fd_reply;
+	ubus_method_foo_fd_reply(t);
+}
+
+static int ubus_method_foo(struct ubus_context *ctx, struct ubus_object *obj,
+		      struct ubus_request_data *req, const char *method,
+		      struct blob_attr *msg)
+{
+	struct ubus_foo_request *hreq;
+	struct blob_attr *tb[__FOO_MAX];
+	const char *format = "%s received a message: %s";
+	const char *msgstr = "(unknown)";
+
+	blobmsg_parse(ubus_foo_policy, ARRAY_SIZE(ubus_foo_policy), tb, blob_data(msg), blob_len(msg));
+
+	if (tb[FOO_MSG])
+		msgstr = blobmsg_data(tb[FOO_MSG]);
+
+	hreq = calloc(1, sizeof(*hreq) + strlen(format) + strlen(obj->name) + strlen(msgstr) + 1);
+	if (!hreq)
+		return UBUS_STATUS_UNKNOWN_ERROR;
+
+	sprintf(hreq->data, format, obj->name, msgstr);
+	ubus_defer_request(ctx, req, &hreq->req);
+	hreq->timeout.cb = ubus_method_foo_reply;
+	uloop_timeout_set(&hreq->timeout, 1000);
+
+	return 0;
+}
+
+
+static const struct ubus_method ubus_methods[] = {
+	UBUS_METHOD("foo", ubus_method_foo, ubus_foo_policy)
+};
+
+
+
+static struct ubus_object_type ubus_test_object_type =
+	UBUS_OBJECT_TYPE("test", ubus_methods);
+
+static struct ubus_object ubus_test_object = {
+	.name = "test",
+	.type = &ubus_test_object_type,
+	.methods = ubus_methods,
+	.n_methods = ARRAY_SIZE(ubus_methods),
+};
+
+
+int ubus_init() {
+	int ret;
+
+	ret = ubus_add_object(ctx, &ubus_test_object);
+	if (ret)
+		fprintf(stderr, "Failed to add object: %s\n", ubus_strerror(ret));
+  
+
+  // TODO
+  // Figure out how to LISTEN on ctx and react accordingly
+  // without using ubus_add_uloop and uloop_run
+
+}
+
+// END UBUS STUFF
 
 int main(int argc, char** argv) {
 

@@ -39,12 +39,13 @@ Then edit cross_compile_env.sh changing all of the paths what makes sense for (c
 . cross_compile_env.sh
 ```
 
+If you don't have a compiled sudowrt-firmware handy, and you don't want to wait, you should be able to download a pre-compiled version [here](https://builds.sudomesh.org/toolchains/).
+
 Now you can cross-compile with:
 
 ```
 make
 ```
-
 
 This will set a bunch of environment variables for the current shell.
 

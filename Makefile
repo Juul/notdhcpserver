@@ -1,5 +1,5 @@
 
-LIBS=-lnl-3 -lnl-genl-3
+LIBS=-lnl-3 -lnl-genl-3 -lubus -lubox -ljson-c
 INCLUDES=-I./swlib -I$(STAGING_DIR)/usr/include/libnl3
 
 all: client server
