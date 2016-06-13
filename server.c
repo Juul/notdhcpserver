@@ -23,6 +23,8 @@
 #include "switch.h"
 #endif
 
+#include "ipc.h"
+
 #include "crc32.h"
 #include "common.h"
 #include "protocol.h"
@@ -57,6 +59,7 @@ struct interface {
 // global variables below
 
 int verbose = 0;
+int ipc_enabled = 0;
 struct interface* interfaces = NULL;
 char* ssl_cert_path = NULL;
 char* ssl_cert = NULL;
@@ -354,7 +357,7 @@ int handle_incoming(struct interface* iface) {
   }
 
   if(req.type == REQUEST_TYPE_HEARTBEAT) {
-
+    
     iface = get_iface_by_vlan(req.vlan);
     if(!iface) {
       syslog(LOG_ERR, "Client HEARTBEAT did not include VLAN ID");
@@ -412,6 +415,8 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
+  fprintf(out, "  -i: Enable inter-process communication (needed for -l to work).\n");  
+  fprintf(out, "  -l: List status of each client.\n");  
   fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
@@ -435,6 +440,10 @@ void usagefail(char* command_name) {
 
 struct interface* new_interface() {
   struct interface* iface = (struct interface*) malloc(sizeof(struct interface));
+
+  iface->ifname = NULL;
+  iface->ip = NULL;
+  iface->next = NULL;
 
   return iface;
 }
@@ -463,6 +472,7 @@ int stop_monitor_interface(struct interface* iface) {
 int monitor_interface(struct interface* iface) {
 
   iface->sock = open_socket(iface->ifname, &(iface->addr), SERVER_PORT);
+  printf("OPENED SOCKET for iface->sock: %d\n", iface->sock);
   if(iface->sock < 0) {
     syslog(LOG_ERR, "opening socket failed on %s\n", iface->ifname);
     return -1;
@@ -522,7 +532,7 @@ int parse_arg(char* arg) {
       if(vlan_dot_index) {
         len = i - vlan_dot_index - 1;
         if((len < 1) || (len > 3)) { // VLAN ID too long
-          iface->vlan = 0;
+          iface->vlan = -1;
         } else {
           memcpy(tmp, arg + vlan_dot_index + 1, len);
           tmp[len] = '\0';
@@ -542,7 +552,7 @@ int parse_arg(char* arg) {
       memcpy(iface->ip, arg + ip_offset, ip_len);
       iface->ip[ip_len] = '\0';
       netmask_offset = i + 1;
-
+      
       netmask_len = strlen(arg) - netmask_offset;
       if(netmask_len > 2) {
         fprintf(stderr, "Netmask must be of the form e.g. /24\n");
@@ -557,9 +567,11 @@ int parse_arg(char* arg) {
     }
   }
 
-  if(!iface->ifname || !iface->ip || !iface->netmask) {
+  if(!iface->ifname || !iface->ip || !iface->netmask || (iface->vlan < 0)) {
     fprintf(stderr, "Failed to parse argument: %s\n", arg);
+    fprintf(stderr, "  Hint: Argument must look like e.g: eth0.1=100.64.2.1/24");
     syslog(LOG_ERR, "Failed to parse argument: %s\n", arg);
+    syslog(LOG_ERR, "  Hint: Argument must look like e.g: eth0.1=100.64.2.1/24");
     return -1;
   }
 
@@ -694,9 +706,10 @@ void check_switch_links() {
 
 
 int main(int argc, char** argv) {
-
+  
   fd_set fdset;
   int nlsock;
+  int ret;
   int max_fd;
   int num_ready;
   struct timeval timeout;
@@ -706,14 +719,21 @@ int main(int argc, char** argv) {
   int log_option = LOG_PERROR;
   time_t time_diff;
   char netmask[3];
+  char client_cmd = '\0';
 
   if(argc <= 0) {
     usagefail(NULL);
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:k:s:t:vfh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:t:ilvfh")) != -1) {
     switch (c) {
+    case 'i':
+      ipc_enabled = 1;
+      break;
+    case 'l':
+      client_cmd = 'l';
+      break;
     case 's':
       hook_script_path = optarg;
       break;
@@ -746,6 +766,17 @@ int main(int argc, char** argv) {
       usage(argv[0], stdout);
       exit(0);
     }
+  }
+  
+  if(client_cmd != '\0') {
+    if(client_cmd == 'l') {
+      printf("SENDING MESSAGE\n");
+      ret = send_uclient_msg('l', NULL, 1);
+      if(ret < 0) {
+        exit(1);
+      }
+    }
+    return 0;
   }
 
   // need at least one non-option argument
@@ -793,6 +824,10 @@ int main(int argc, char** argv) {
 
   init_signals();
 
+  if(ipc_enabled) {
+    open_ipc_socket();
+  }
+
   for(;;) {
 
     // initialize fdset
@@ -818,6 +853,10 @@ int main(int argc, char** argv) {
       }
     }
 
+    if(ipc_enabled) {
+      max_fd = add_uclients_to_fd_set(&fdset, max_fd);
+    }
+
     timeout.tv_sec = SELECT_TIMEOUT;
     timeout.tv_usec = 0;
 
@@ -836,6 +875,10 @@ int main(int argc, char** argv) {
       }
     } else {
       check_switch_links();
+    }
+
+    if(ipc_enabled) {
+      handle_uclient_connections(&fdset);
     }
 
     iface = interfaces;
@@ -859,7 +902,7 @@ int main(int argc, char** argv) {
           snprintf(netmask, 3, "%d", iface->netmask);
 
           iface->state = STATE_LISTENING;
-
+          
           run_hook_script(hook_script_path, "down", iface->ifname, iface->ip, netmask, NULL);
         } else {
           iface->last_contact = time(NULL);
@@ -867,6 +910,7 @@ int main(int argc, char** argv) {
       }
       
       if(FD_ISSET(iface->sock, &fdset)) {
+        printf("Something on iface->sock: %d\n", iface->sock);
         while(handle_incoming(iface) > 0) {
           // nothing here
         }
@@ -877,3 +921,4 @@ int main(int argc, char** argv) {
 
   return 0;
 }
+      
