@@ -13,9 +13,13 @@
 #include <arpa/inet.h>
 #include <sys/un.h>
 
+#include "server.h"
 #include "ipc.h"
 
 char* socket_file = "/tmp/notdhcpserver.sock";
+
+extern struct interface* interfaces;
+extern int has_switch;
 
 struct uclient* uclients = NULL;
 int uclient_count = 0;
@@ -104,31 +108,55 @@ struct uclient* is_uclient_fd(int fd) {
   return NULL;
 }
 
-void handle_uclient_msg(struct uclient* ucl) {
-
-  char cmd;
-  char* arg;
-
-  cmd = (ucl->msg)[0];
-  arg = (ucl->msg)+1;
-
-  switch(cmd) {
-
-  case 'l':
-    send_link_status(ucl);
-    break;
-  }
-
-  remove_uclient(ucl);
-}
-
 void send_link_status(struct uclient* ucl) {
+  struct interface* iface;
   char* buf;
   size_t len = 0;
   FILE *stream;
 
   stream = open_memstream(&buf, &len);
-  fprintf(stream, "TODO: Implement this\n");
+
+  fprintf(stream, "{\n");
+
+#ifdef SWLIB
+  if(has_switch > 0) {
+    fprintf(stream, "  \"has_switch\": true,\n");
+  } else {
+    fprintf(stream, "  \"has_switch\": false,\n");
+  }
+#else
+  fprintf(stream, "  \"has_switch\": false,\n");
+#endif
+
+  fprintf(stream, "  \"interfaces\": [\n");
+
+  iface = interfaces;
+  do {
+    fprintf(stream, "    {\n");
+    fprintf(stream, "      \"ifname\": \"%s\",\n", iface->ifname);
+    fprintf(stream, "      \"vlan\": %d,\n", iface->vlan);
+    fprintf(stream, "      \"ip\": \"%s\",\n", iface->ip);
+    fprintf(stream, "      \"netmask\": %d,\n", iface->netmask);
+    fprintf(stream, "      \"time_since_last_contact\": %lld,\n", (long long) iface->time_passed);
+    if(iface->state == STATE_STOPPED) {
+      fprintf(stream, "      \"state\": \"unplugged\"\n");
+    } else if(iface->state == STATE_LISTENING) {
+      fprintf(stream, "      \"state\": \"plugged\"\n");
+    } else if(iface->state == STATE_GOT_ACK) {
+      fprintf(stream, "      \"state\": \"connected\"\n");
+    } else {
+      fprintf(stream, "      \"state\": \"unknown\"\n");
+    }
+    if(iface->next) {
+      fprintf(stream, "    },\n");
+    } else {
+      fprintf(stream, "    }\n");
+    }
+  } while(iface = iface->next);
+
+  fprintf(stream, "  ]\n");
+  fprintf(stream, "}\n");
+
   fflush(stream);
   fclose(stream);
 
@@ -139,10 +167,28 @@ void send_link_status(struct uclient* ucl) {
   send_uclient_response(ucl, buf, len+1);
 }
 
+void handle_uclient_msg(struct uclient* ucl) {
+
+  char cmd;
+  char* arg;
+
+  cmd = (ucl->msg)[0];
+  arg = (ucl->msg)+1;
+
+  switch(cmd) {
+
+  case 'i':
+    send_link_status(ucl);
+    break;
+  }
+
+  remove_uclient(ucl);
+}
+
 void send_uclient_response(struct uclient* ucl, char* data, size_t len) {
   int sent_data = 0;
   ssize_t ret;
-  
+
   while(sent_data < len) {
     ret = send(ucl->fd, data + sent_data, len - sent_data, 0);
     if(ret < 0) {
@@ -150,29 +196,24 @@ void send_uclient_response(struct uclient* ucl, char* data, size_t len) {
     }
     sent_data += ret;
   }
+
   close(ucl->fd);
 }
 
 void receive_uclient_msg(struct uclient* ucl) {
   int num_bytes = read(ucl->fd, ucl->msg + ucl->msg_len, MAX_UCLIENT_MSG_SIZE - ucl->msg_len);
 
-  printf("got bytes: %d\n", num_bytes);
   if(num_bytes < 0) {
     fprintf(stderr, "Error reading from socket %s: %s\n", socket_file, strerror(errno));
     return;
-  } else if(num_bytes == 0) {
-    printf("GOT LAST PART\n");
-    ucl->msg[ucl->msg_len] = '\0';
-    handle_uclient_msg(ucl);
-    return;
   }
-  // if this is an information request
-  if(ucl->msg[0] == 'l') {
+
+  // TODO better check that entire message has been received
+  if(num_bytes >= 1) {
     handle_uclient_msg(ucl);
-    return;    
   }
   
-  ucl->msg_len += num_bytes;
+//  ucl->msg_len += num_bytes;
 }
 
 
@@ -218,7 +259,7 @@ int send_uclient_msg(char cmd, char* arg, int get_response) {
 			
   if(connect(sock, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) < 0) {
     fprintf(stderr, "Connect failed to %s: %s\n", socket_file, strerror(errno));
-    fprintf(stderr, "Are you sure you have a running babeld instance?\n");
+    fprintf(stderr, "Are you sure you have a running notdhcpserver instance?\n");
     free(full_cmd);
     close(sock);
     return -1;
@@ -250,12 +291,11 @@ int send_uclient_msg(char cmd, char* arg, int get_response) {
         return -1;
       } else if(ret == 0) {
         received[bytes_received] = '\0';
-        printf("%s\n", received);
         break;
       }
       bytes_received += ret;
     }
-
+    printf("%s", received);
   }
 
   close(sock);
@@ -288,7 +328,7 @@ int open_ipc_socket() {
     }
     //    printf("connect() error: %d | %s\n", errno, strerror(errno));
   } else {
-    fprintf(stderr, "Looks like babeld is already running.\nUse '-a devname' to add a device.");
+    fprintf(stderr, "Looks like notdhcpserver is already running.\nUse -l to get status.");
     return 1;
   }
 
@@ -317,9 +357,7 @@ void accept_ipc_connection() {
     return;
   }
 
-  printf("Accepting on: %d\n", usock);
 	fd = accept(usock, (struct sockaddr *)&addr, &addr_size);
-  printf("GOT INCOMING CONNECTION ON SOCKET: %d\n", fd);
 
 	if(fd < 0) {
     fprintf(stderr, "Accept failed on socket %s: %s\n", socket_file, strerror(errno));
@@ -338,12 +376,10 @@ int add_uclients_to_fd_set(fd_set* readfds, int maxfd) {
   // add unix ipc socket to set
   FD_SET(usock, readfds);
   maxfd = MAX(maxfd, usock);
-  printf("Adding usock: %d\n", usock);
 
   FOR_ALL_UCLIENTS(ucl) {
     FD_SET(ucl->fd, readfds);
     maxfd = MAX(maxfd, ucl->fd);
-    printf("Adding client sock: %d\n", ucl->fd);
   }
   return maxfd;
 }

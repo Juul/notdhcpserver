@@ -27,34 +27,16 @@
 
 #include "crc32.h"
 #include "common.h"
-#include "protocol.h"
+
 #include "phyconnect.h"
+
+#include "server.h"
 
 #define VERSION "0.3"
 
 #define SELECT_TIMEOUT (2)
 
-// structs below
 
-struct interface {
-  char* ifname;
-  int vlan;
-  char* ip;
-  int netmask;
-  int sock;
-  int sock_l2;
-  struct sockaddr_in addr;
-  struct sockaddr_ll addr_l2;
-  char password[PASSWORD_LENGTH + 1];
-  int state;
-  time_t time_passed;
-  time_t last_contact;
-  struct interface* next;
-};
-
-#define STATE_STOPPED (0)
-#define STATE_LISTENING (1)
-#define STATE_GOT_ACK (2)
 
 // global variables below
 
@@ -415,8 +397,8 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
-  fprintf(out, "  -i: Enable inter-process communication (needed for -l to work).\n");  
-  fprintf(out, "  -l: List status of each client.\n");  
+  fprintf(out, "  -u: Enable inter-process communication (needed for -l to work).\n");  
+  fprintf(out, "  -i: List status of each client.\n");  
   fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
@@ -472,7 +454,6 @@ int stop_monitor_interface(struct interface* iface) {
 int monitor_interface(struct interface* iface) {
 
   iface->sock = open_socket(iface->ifname, &(iface->addr), SERVER_PORT);
-  printf("OPENED SOCKET for iface->sock: %d\n", iface->sock);
   if(iface->sock < 0) {
     syslog(LOG_ERR, "opening socket failed on %s\n", iface->ifname);
     return -1;
@@ -652,7 +633,7 @@ void physical_ethernet_state_change(char* ifname, int connected) {
             printf("%s: Physical connection detected\n", ifname);
             fflush(stdout);
           }
-          syslog(LOG_DEBUG, "%s: Physical disconnect detected\n", ifname);
+          syslog(LOG_DEBUG, "%s: Physical connection detected\n", ifname);
           if(monitor_interface(iface) < 0) {
             return;
           }
@@ -726,13 +707,13 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:k:s:t:ilvfh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:t:uivfh")) != -1) {
     switch (c) {
-    case 'i':
+    case 'u':
       ipc_enabled = 1;
       break;
-    case 'l':
-      client_cmd = 'l';
+    case 'i':
+      client_cmd = 'i';
       break;
     case 's':
       hook_script_path = optarg;
@@ -769,9 +750,8 @@ int main(int argc, char** argv) {
   }
   
   if(client_cmd != '\0') {
-    if(client_cmd == 'l') {
-      printf("SENDING MESSAGE\n");
-      ret = send_uclient_msg('l', NULL, 1);
+    if(client_cmd == 'i') {
+      ret = send_uclient_msg('i', NULL, 1);
       if(ret < 0) {
         exit(1);
       }
@@ -909,7 +889,7 @@ int main(int argc, char** argv) {
         }
       }
       
-      if(FD_ISSET(iface->sock, &fdset)) {
+      if((iface->state != STATE_STOPPED) && FD_ISSET(iface->sock, &fdset)) {
         printf("Something on iface->sock: %d\n", iface->sock);
         while(handle_incoming(iface) > 0) {
           // nothing here
