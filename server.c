@@ -59,6 +59,7 @@ struct interface {
 
 // global variables below
 
+int ubus_enabled = 0;
 int verbose = 0;
 struct interface* interfaces = NULL;
 char* ssl_cert_path = NULL;
@@ -415,6 +416,7 @@ void usage(char* command_name, FILE* out) {
   fprintf(out, "Usage: %s [-v] ifname=ip/netmask [ifname2=ip2/netmask2 ...]\n", command_name);
   fprintf(out, "\n");
   fprintf(out, "  -s: Hook script. See readme for more info.\n");  
+  fprintf(out, "  -u: Enable ubus support.\n");
   fprintf(out, "  -f: Do not write to stderror, only to system log.\n");  
   fprintf(out, "  -c ssl_cert: Path to SSL cert to send to client\n");
   fprintf(out, "  -k ssl_key: Path to SSL key to send to client\n");
@@ -801,18 +803,41 @@ static struct ubus_object ubus_test_object = {
 };
 
 
+
 int ubus_init() {
 	int ret;
 
-	ret = ubus_add_object(ctx, &ubus_test_object);
-	if (ret)
-		fprintf(stderr, "Failed to add object: %s\n", ubus_strerror(ret));
+	const char *ubus_socket = NULL;
+
+	ctx = ubus_connect(ubus_socket);
+	if(!ctx) {
+		fprintf(stderr, "Failed to connect to ubus\n");
+		return -1;
+	}
   
+  if(verbose) {
+    printf("Connected to ubus\n");
+  }
+
+	ret = ubus_add_object(ctx, &ubus_test_object);
+	if(ret) {
+		fprintf(stderr, "Failed to add ubus object: %s\n", ubus_strerror(ret));
+    return -1;
+  }
+
+  if(verbose) {
+    printf("Added ubus object\n");
+  }
 
   // TODO
   // Figure out how to LISTEN on ctx and react accordingly
   // without using ubus_add_uloop and uloop_run
 
+  return 0;
+}
+
+int ubus_end() {
+	ubus_free(ctx);
 }
 
 // END UBUS STUFF
@@ -836,8 +861,13 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  while((c = getopt(argc, argv, "c:k:s:t:vfh")) != -1) {
+  while((c = getopt(argc, argv, "c:k:s:t:vfhu:")) != -1) {
     switch (c) {
+    case 'u':
+      if(ubus_init() >= 0) {
+        ubus_enabled = 1;
+      }
+      break;
     case 's':
       hook_script_path = optarg;
       break;
@@ -942,6 +972,13 @@ int main(int argc, char** argv) {
       }
     }
 
+    if(ubus_enabled) {
+      FD_SET(ctx->sock.fd, &fdset);
+      if(ctx->sock.fd> max_fd) {
+        max_fd = ctx->sock.fd;
+      }
+    }
+
     timeout.tv_sec = SELECT_TIMEOUT;
     timeout.tv_usec = 0;
 
@@ -961,6 +998,11 @@ int main(int argc, char** argv) {
     } else {
       check_switch_links();
     }
+
+    if(ubus_enabled && FD_ISSET(ctx->sock.fd, &fdset)) {
+      printf("Event on ubus socket!\n");
+      ubus_handle_data(ctx->sock, ULOOP_READ);
+    }    
 
     iface = interfaces;
     do {
